@@ -17,7 +17,9 @@
     "db:migrate:undo": "sequelize-cli db:migrate:undo",
     "db:migrate:undo:all": "sequelize-cli db:migrate:undo:all",
     "db:seed": "sequelize-cli db:seed:all",
-    "db:reset": "sequelize-cli db:migrate:undo:all && sequelize-cli db:migrate && sequelize-cli db:seed:all"
+    "db:reset": "sequelize-cli db:migrate:undo:all && sequelize-cli db:migrate && sequelize-cli db:seed:all",
+    "migrate": "sequelize-cli db:migrate",
+    "build": "npm run migrate && echo 'Backend Built Successfully"
   },
   "dependencies": {
     "bcrypt": "^5.1.0",

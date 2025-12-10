@@ -1,10 +1,11 @@
 require('dotenv').config();
+const pg = require('pg');
 
 const { DATABASE_URL, NODE_ENV } = process.env;
 
 // Serverless-optimized pool settings
 const poolConfig = {
-  max: 2, // Reduced for serverless
+  max: 3, // Reduced for serverless
   min: 0,
   acquire: 30000,
   idle: 10000,
@@ -15,6 +16,7 @@ module.exports = {
   development: {
     url: DATABASE_URL,
     dialect: 'postgres',
+    dialectModule: pg,
     logging: false,
     pool: poolConfig,
     dialectOptions: {
@@ -29,6 +31,7 @@ module.exports = {
   production: {
     url: DATABASE_URL,
     dialect: 'postgres',
+    dialectModule: pg,
     logging: false,
     pool: {
       ...poolConfig,
