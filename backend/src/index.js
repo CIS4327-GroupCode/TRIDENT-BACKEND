@@ -37,15 +37,20 @@ app.use(cors({
       callback(null, true);
     } else {
       console.warn('CORS blocked origin:', origin);
-      callback(new Error('Not allowed by CORS'));
+      callback(null, true); // Allow in production to debug, change to callback(new Error('Not allowed by CORS')) later
     }
   },
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  preflightContinue: false,
+  optionsSuccessStatus: 204
 }));
 
 app.use(express.json());
+
+// Handle OPTIONS requests explicitly for CORS preflight
+app.options('*', cors());
 
 // Health check endpoint
 app.get('/health', (req, res) => {

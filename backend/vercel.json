@@ -9,10 +9,16 @@
   "routes": [
     {
       "src": "/health",
+      "methods": ["GET", "HEAD", "OPTIONS"],
       "dest": "src/index.js"
     },
     {
       "src": "/api/(.*)",
+      "methods": ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+      "dest": "src/index.js"
+    },
+    {
+      "src": "/(.*)",
       "dest": "src/index.js"
     }
   ],
