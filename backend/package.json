@@ -22,7 +22,7 @@
     "build": "npm ci --omit=dev && npm run migrate && echo 'Backend Built Successfully'"
   },
   "dependencies": {
-    "bcrypt": "^5.1.0",
+    "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
     "crypto-js": "^4.2.0",
     "dotenv": "^16.0.3",

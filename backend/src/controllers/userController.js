@@ -1,5 +1,5 @@
 const { User, UserPreferences, Organization, ResearcherProfile } = require('../database/models');
-const bcrypt = require('bcrypt');
+const bcrypt = require('bcryptjs');
 
 /**
  * Get current user profile

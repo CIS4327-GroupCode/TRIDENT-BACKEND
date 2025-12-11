@@ -1,6 +1,6 @@
 const { User, Organization, ResearcherProfile, Project, Milestone, ProjectReview, sequelize } = require('../database/models');
 const { Op } = require('sequelize');
-const bcrypt = require('bcrypt');
+const bcrypt = require('bcryptjs');
 
 /**
  * Get dashboard statistics
