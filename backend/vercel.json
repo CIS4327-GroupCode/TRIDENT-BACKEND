@@ -1,16 +1,24 @@
 {
   "version": 2,
+  "buildCommand": "npm install && npm run migrate",
+  "devCommand": "npm run dev",
   "builds": [
     {
       "src": "src/index.js",
-      "use": "@vercel/node"
+      "use": "@vercel/node",
+      "config": {
+        "maxLambdaSize": "50mb"
+      }
     }
   ],
   "routes": [
     {
       "src": "/health",
       "methods": ["GET", "HEAD", "OPTIONS"],
-      "dest": "src/index.js"
+      "dest": "src/index.js",
+      "cache": {
+        "maxAge": 60
+      }
     },
     {
       "src": "/api/(.*)",
@@ -24,5 +32,13 @@
   ],
   "env": {
     "NODE_ENV": "production"
+  },
+  "functions": {
+    "src/index.js": {
+      "memory": 1024,
+      "maxDuration": 30,
+      "includeFiles": "src/**",
+      "excludeFiles": "tests/**,*.test.js"
+    }
   }
 }

@@ -13,17 +13,4 @@ const sequelize = new Sequelize(dbConfig.url, {
   dialectOptions: dbConfig.dialectOptions
 });
 
-// Test connection
-async function testConnection() {
-  try {
-    await sequelize.authenticate();
-    console.log('Sequelize database connection established successfully.');
-  } catch (error) {
-    console.error('Unable to connect to the database:', error);
-    throw error;
-  }
-}
-
-testConnection();
-
 module.exports = sequelize;

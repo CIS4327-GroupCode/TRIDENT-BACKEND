@@ -104,9 +104,21 @@ app.use((err, req, res, next) => {
 
 const PORT = process.env.PORT || 5000;
 
+// Validate critical environment variables
+function validateEnvironment() {
+  const requiredVars = ['DATABASE_URL', 'JWT_SECRET'];
+  const missing = requiredVars.filter(v => !process.env[v]);
+  
+  if (missing.length > 0) {
+    throw new Error(`Missing required environment variables: ${missing.join(', ')}`);
+  }
+}
+
 // Start server after database connection is ready
 async function startServer() {
   try {
+    validateEnvironment();
+    
     // Test database connection
     await sequelize.authenticate();
     console.log('✓ Database connection established successfully');
