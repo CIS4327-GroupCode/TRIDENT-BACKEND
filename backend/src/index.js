@@ -123,35 +123,40 @@ function validateEnvironment() {
   }
 }
 
-// Start server after database connection is ready
-async function startServer() {
-  try {
-    validateEnvironment();
-    
-    // Test database connection
-    await sequelize.authenticate();
-    console.log('✓ Database connection established successfully');
-    
-    // Sync database (use migrations in production!)
-    if (process.env.NODE_ENV !== 'production') {
-      await sequelize.sync({ alter: false });
-      console.log('✓ Database synchronized');
-    }
-    
-    app.listen(PORT, () => {
-      console.log(`✓ Backend server running on http://localhost:${PORT}`);
-      console.log(`✓ Health check available at http://localhost:${PORT}/health`);
-      console.log(`✓ API endpoints available at http://localhost:${PORT}/api/*`);
-    });
-  } catch (error) {
-    console.error('✗ Failed to start server:', error.message);
-    console.error('Full error:', error);
-    process.exit(1);
-  }
+// Initialize and export app without calling listen()
+try {
+  validateEnvironment();
+} catch (error) {
+  console.error('✗ Environment validation failed:', error.message);
+  process.exit(1);
 }
 
-// Only start server if not in Vercel serverless environment
+// Start server only in local/Node.js environment (not in Vercel)
 if (process.env.VERCEL !== '1') {
+  async function startServer() {
+    try {
+      // Test database connection
+      await sequelize.authenticate();
+      console.log('✓ Database connection established successfully');
+      
+      // Sync database (use migrations in production!)
+      if (process.env.NODE_ENV !== 'production') {
+        await sequelize.sync({ alter: false });
+        console.log('✓ Database synchronized');
+      }
+      
+      app.listen(PORT, () => {
+        console.log(`✓ Backend server running on http://localhost:${PORT}`);
+        console.log(`✓ Health check available at http://localhost:${PORT}/health`);
+        console.log(`✓ API endpoints available at http://localhost:${PORT}/api/*`);
+      });
+    } catch (error) {
+      console.error('✗ Failed to start server:', error.message);
+      console.error('Full error:', error);
+      process.exit(1);
+    }
+  }
+  
   startServer();
 }
 
