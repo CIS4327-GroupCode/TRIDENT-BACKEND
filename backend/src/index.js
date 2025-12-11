@@ -52,6 +52,15 @@ app.use(express.json());
 // Handle OPTIONS requests explicitly for CORS preflight
 app.options('*', cors());
 
+// Favicon handler - prevent 404/500 errors
+app.get('/favicon.ico', (req, res) => {
+  res.status(204).send();
+});
+
+app.get('/favicon.png', (req, res) => {
+  res.status(204).send();
+});
+
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.json({ 
