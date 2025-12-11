@@ -70,6 +70,11 @@ const adminRoutes = require('./routes/adminRoutes');
 const projectRoutes = require('./routes/projectRoutes');
 const messageRoutes = require('./routes/messagesRoutes');
 
+//home route just to check if server is running
+app.get('/', (req, res) => {
+  res.send('Trident Backend is running');
+});
+
 // Mount routes with /api prefix for clarity
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
