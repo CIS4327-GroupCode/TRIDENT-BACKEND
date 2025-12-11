@@ -1,14 +1,11 @@
 {
   "version": 2,
-  "buildCommand": "npm ci && npm run migrate",
+  "buildCommand": "npm ci --omit=dev && npm run migrate",
   "devCommand": "npm run dev",
   "builds": [
     {
       "src": "src/index.js",
-      "use": "@vercel/node",
-      "config": {
-        "maxLambdaSize": "50mb"
-      }
+      "use": "@vercel/node"
     }
   ],
   "routes": [

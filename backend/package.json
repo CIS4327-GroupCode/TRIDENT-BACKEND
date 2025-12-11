@@ -19,7 +19,8 @@
     "db:seed": "sequelize-cli db:seed:all",
     "db:reset": "sequelize-cli db:migrate:undo:all && sequelize-cli db:migrate && sequelize-cli db:seed:all",
     "migrate": "sequelize-cli db:migrate",
-    "build": "npm ci && npm run migrate && echo 'Backend Built Successfully'"
+    "build": "npm ci --omit=dev && npm run migrate && echo 'Backend Built Successfully'",
+    "postinstall": "npm rebuild bcrypt --build-from-source"
   },
   "dependencies": {
     "bcrypt": "^5.1.0",
