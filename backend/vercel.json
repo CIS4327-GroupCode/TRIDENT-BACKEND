@@ -15,10 +15,7 @@
     {
       "src": "/health",
       "methods": ["GET", "HEAD", "OPTIONS"],
-      "dest": "src/index.js",
-      "cache": {
-        "maxAge": 60
-      }
+      "dest": "src/index.js"
     },
     {
       "src": "/api/(.*)",
