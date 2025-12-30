@@ -48,4 +48,25 @@ module.exports = {
       keepAlive: false,
     },
   },
+
+  test: {
+    url: DATABASE_URL || 'postgresql://test:test@localhost:5432/trident_test',
+    dialect: 'postgres',
+    dialectModule: pg,
+    logging: false,
+    pool: {
+      max: 5,
+      min: 0,
+      acquire: 30000,
+      idle: 10000,
+    },
+    dialectOptions: {
+      // Only use SSL if DATABASE_URL is provided (cloud database)
+      // Local databases typically don't support SSL
+      ssl: DATABASE_URL && DATABASE_URL.includes('neon') ? {
+        require: true,
+        rejectUnauthorized: false,
+      } : false,
+    },
+  },
 };

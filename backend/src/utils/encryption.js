@@ -1,7 +1,7 @@
-import CryptoJS from "crypto-js";
+const CryptoJS = require("crypto-js");
 
 // Encrypt plaintext → return JSON string for DB
-export function encryptMessage(plaintext, key) {
+function encryptMessage(plaintext, key) {
     const iv = CryptoJS.lib.WordArray.random(16);
     const encrypted = CryptoJS.AES.encrypt(plaintext, key, { iv });
 
@@ -12,7 +12,7 @@ export function encryptMessage(plaintext, key) {
 }
 
 // Decrypt DB JSON string → return plaintext
-export function decryptMessage(storedBody, key) {
+function decryptMessage(storedBody, key) {
     try {
         const { iv, ciphertext } = JSON.parse(storedBody);
 
@@ -27,3 +27,5 @@ export function decryptMessage(storedBody, key) {
         return "[Decrypt Error]";
     }
 }
+
+module.exports = { encryptMessage, decryptMessage };

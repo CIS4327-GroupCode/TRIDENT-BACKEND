@@ -156,9 +156,12 @@ if (process.env.VERCEL !== '1') {
       process.exit(1);
     }
   }
-  
-  startServer();
+
+  // Only start server if not in test mode and not imported as a module
+  if (process.env.NODE_ENV !== 'test') {
+    startServer();
+  }
 }
 
-// Export app for Vercel serverless functions
+// Export app for Vercel serverless functions and tests
 module.exports = app;

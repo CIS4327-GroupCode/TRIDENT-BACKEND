@@ -10,7 +10,7 @@ jest.mock('../../src/models/authModel', () => ({
   createUser: jest.fn()
 }));
 
-jest.mock('bcrypt', () => ({
+jest.mock('bcryptjs', () => ({
   hash: jest.fn(),
   compare: jest.fn()
 }));
@@ -20,7 +20,7 @@ jest.mock('jsonwebtoken', () => ({
   verify: jest.fn()
 }));
 
-const bcrypt = require('bcrypt');
+const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const authController = require('../../src/controllers/authController');
 const authModel = require('../../src/models/authModel');

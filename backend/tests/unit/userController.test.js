@@ -4,7 +4,7 @@
  */
 
 // Mock dependencies BEFORE imports
-jest.mock('bcrypt', () => ({
+jest.mock('bcryptjs', () => ({
   hash: jest.fn(),
   compare: jest.fn()
 }));
@@ -22,7 +22,7 @@ jest.mock('../../src/database/models', () => ({
   ResearcherProfile: {}
 }));
 
-const bcrypt = require('bcrypt');
+const bcrypt = require('bcryptjs');
 const userController = require('../../src/controllers/userController');
 const { User, UserPreferences, Organization, ResearcherProfile } = require('../../src/database/models');
 

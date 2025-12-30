@@ -7,17 +7,31 @@
 
 ## Overview
 
-**Last Updated**: December 2, 2025  
-**Test Count**: 59 tests  
-**Pass Rate**: 100%
+**Last Updated**: December 18, 2025  
+**Test Count**: 132+ tests  
+**Pass Rate**: Target 100%
 
-This test suite provides comprehensive unit testing for the TRIDENT Match Portal backend. Tests are designed to be **database-independent** and use mocking to isolate business logic.
+This test suite provides comprehensive unit and integration testing for the TRIDENT Match Portal backend. Tests are designed to be **database-independent** and use mocking to isolate business logic.
 
 ## Test Structure
 
 ```
 tests/
-├── setup.js                    # Global test configuration
+├── setup.js                       # Global test configuration
+├── unit/                          # Unit tests (isolated components)
+│   ├── adminController.test.js    # Admin operations (14 tests) ✅ NEW
+│   ├── authController.test.js     # Authentication (20 tests)
+│   ├── auth.middleware.test.js    # Auth middleware (15 tests)
+│   ├── milestoneController.test.js # Milestones (11 tests) ✅ NEW
+│   ├── organizationController.test.js # Organizations (8 tests) ✅ NEW
+│   ├── projectController.test.js   # Projects (12 tests) ✅ NEW
+│   ├── researcherController.test.js # Researchers (10 tests) ✅ NEW
+│   └── userController.test.js      # Users (25 tests)
+├── integration/                   # Integration tests ✅ NEW
+│   ├── database.test.js           # Model operations (9 tests)
+│   └── routes.test.js             # API endpoints (8 tests)
+└── mocks/                         # Mock data and utilities
+```
 ├── jest.config.js              # Jest configuration
 ├── mocks/                      # Mock implementations
 │   ├── auth.js                 # Authentication middleware mocks

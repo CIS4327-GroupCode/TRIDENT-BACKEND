@@ -1,6 +1,4 @@
-const Milestone = require('../database/models/Milestone');
-const Project = require('../database/models/Project');
-const User = require('../database/models/User');   // ⬅️ add this
+const { Milestone, Project, User } = require('../database/models');
 const { Op } = require('sequelize');
 
 /**
