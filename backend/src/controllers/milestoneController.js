@@ -1,5 +1,6 @@
 const { Milestone, Project, User } = require('../database/models');
 const { Op } = require('sequelize');
+const notificationService = require('../services/notificationService');
 
 /**
  * Create a new milestone for a project
@@ -80,6 +81,24 @@ exports.createMilestone = async (req, res) => {
       status: status || 'pending',
       completed_at: status === 'completed' ? new Date() : null
     });
+
+    // Create notification for milestone creation
+    try {
+      await notificationService.createNotification({
+        userId: userId,
+        type: 'milestone_created',
+        title: 'Milestone Created',
+        message: `Milestone "${milestone.name}" has been created for your project.`,
+        link: `/projects/${projectId}/milestones`,
+        metadata: {
+          milestone_id: milestone.milestone_id,
+          milestone_name: milestone.name,
+          project_id: projectId
+        }
+      });
+    } catch (notifError) {
+      console.error('Failed to create milestone notification:', notifError);
+    }
 
     res.status(201).json({
       message: 'Milestone created successfully',
@@ -279,7 +298,52 @@ if (project.org_id !== user.org_id) {
     }
 
     // Update milestone
+    const oldStatus = milestone.status;
     await milestone.update(updates);
+
+    // Create notification for milestone completion
+    if (updates.status && oldStatus !== 'completed' && updates.status === 'completed') {
+      try {
+        await notificationService.createNotification({
+          userId: req.user.id,
+          type: 'milestone_completed',
+          title: 'Milestone Completed',
+          message: `Congratulations! Milestone "${milestone.name}" has been marked as completed.`,
+          link: `/projects/${projectId}/milestones`,
+          metadata: {
+            milestone_id: milestone.id,
+            milestone_name: milestone.name,
+            project_id: projectId
+          }
+        });
+      } catch (notifError) {
+        console.error('Failed to create milestone completion notification:', notifError);
+      }
+    }
+
+    // Create notification for milestone deadline changes
+    if (updates.due_date && oldStatus !== 'completed' && updates.status !== 'completed') {
+      try {
+        const daysUntilDue = milestone.daysUntilDue();
+        if (daysUntilDue <= 3 && daysUntilDue > 0) {
+          await notificationService.createNotification({
+            userId: req.user.id,
+            type: 'milestone_deadline_approaching',
+            title: 'Milestone Deadline Approaching',
+            message: `Milestone "${milestone.name}" is due in ${daysUntilDue} day${daysUntilDue !== 1 ? 's' : ''}.`,
+            link: `/projects/${projectId}/milestones`,
+            metadata: {
+              milestone_id: milestone.id,
+              milestone_name: milestone.name,
+              project_id: projectId,
+              days_until_due: daysUntilDue
+            }
+          });
+        }
+      } catch (notifError) {
+        console.error('Failed to create milestone deadline notification:', notifError);
+      }
+    }
 
     // Add computed fields
     const enrichedMilestone = milestone.toSafeObject();

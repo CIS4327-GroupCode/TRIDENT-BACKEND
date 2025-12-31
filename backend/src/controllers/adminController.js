@@ -1,6 +1,7 @@
 const { User, Organization, ResearcherProfile, Project, Milestone, ProjectReview, sequelize } = require('../database/models');
 const { Op } = require('sequelize');
 const bcrypt = require('bcryptjs');
+const notificationService = require('../services/notificationService');
 
 /**
  * Get dashboard statistics
@@ -201,6 +202,22 @@ const suspendUser = async (req, res) => {
 
     // Soft delete the user
     await user.destroy();
+
+    // Create notification for user suspension
+    try {
+      await notificationService.createNotification({
+        userId: id,
+        type: 'user_suspended',
+        title: 'Account Suspended',
+        message: `Your account has been suspended. Reason: ${reason || 'Not provided'}.`,
+        link: '/help',
+        metadata: {
+          reason: reason
+        }
+      });
+    } catch (notifError) {
+      console.error('Failed to create suspension notification:', notifError);
+    }
 
     res.status(200).json({ 
       message: 'User account suspended successfully',
@@ -740,6 +757,27 @@ const approveProject = async (req, res) => {
       reviewed_at: new Date()
     });
 
+    // Get organization owner to notify
+    const org = await Organization.findByPk(project.org_id);
+    if (org && org.user_id) {
+      try {
+        await notificationService.createNotification({
+          userId: org.user_id,
+          type: 'project_approved',
+          title: 'Project Approved',
+          message: `Great news! Your project "${project.title}" has been approved and is now visible to researchers.`,
+          link: `/projects/${project.project_id}`,
+          metadata: {
+            project_id: project.project_id,
+            project_title: project.title,
+            feedback: feedback
+          }
+        });
+      } catch (notifError) {
+        console.error('Failed to create approval notification:', notifError);
+      }
+    }
+
     // Fetch updated project with associations
     const updatedProject = await Project.findByPk(id, {
       include: [
@@ -802,6 +840,27 @@ const rejectProject = async (req, res) => {
       feedback: rejection_reason,
       reviewed_at: new Date()
     });
+
+    // Get organization owner to notify
+    const org = await Organization.findByPk(project.org_id);
+    if (org && org.user_id) {
+      try {
+        await notificationService.createNotification({
+          userId: org.user_id,
+          type: 'project_rejected',
+          title: 'Project Rejected',
+          message: `Your project "${project.title}" has been reviewed and rejected. ${rejection_reason}`,
+          link: `/projects/${project.project_id}`,
+          metadata: {
+            project_id: project.project_id,
+            project_title: project.title,
+            rejection_reason: rejection_reason
+          }
+        });
+      } catch (notifError) {
+        console.error('Failed to create rejection notification:', notifError);
+      }
+    }
 
     // Fetch updated project with associations
     const updatedProject = await Project.findByPk(id, {
