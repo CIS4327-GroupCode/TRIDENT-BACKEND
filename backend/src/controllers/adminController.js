@@ -684,7 +684,15 @@ const getPendingProjects = async (req, res) => {
         {
           model: Organization,
           as: 'organization',
-          attributes: ['id', 'name', 'EIN', 'mission', 'focus_tags']
+          attributes: ['id', 'name', 'EIN', 'mission', 'focus_tags'],
+          include: [
+            {
+              model: User,
+              as: 'users',
+              attributes: ['id', 'name', 'email'],
+              limit: 1
+            }
+          ]
         },
         {
           model: ProjectReview,
