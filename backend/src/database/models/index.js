@@ -12,6 +12,7 @@ const UserPreferences = require('./UserPreferences');
 const ProjectReview = require('./ProjectReview');
 const AcademicHistory = require('./AcademicHistory');
 const Certification = require('./Certification');
+const Notification = require('./Notification');
 const sequelize = require('../index');
 
 // User <-> ResearcherProfile (one-to-one)
@@ -82,6 +83,10 @@ AcademicHistory.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
 User.hasMany(Certification, { foreignKey: 'user_id', as: 'certifications' });
 Certification.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
 
+// User <-> Notification
+User.hasMany(Notification, { foreignKey: 'user_id', as: 'notifications' });
+Notification.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
+
 module.exports = {
   User,
   Organization,
@@ -97,5 +102,6 @@ module.exports = {
   ProjectReview,
   AcademicHistory,
   Certification,
+  Notification,
   sequelize
 };

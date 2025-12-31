@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const { encryptMessage, decryptMessage } = require("../utils/encryption");
 const sequelize = require("../database"); // your existing DB connection
+const notificationService = require("../services/notificationService");
 
 // SEND MESSAGE (encrypt before storing)
 router.post("/send", async (req, res) => {
@@ -17,6 +18,24 @@ router.post("/send", async (req, res) => {
                 bind: [thread_id, sender_id, recipient_id, encryptedBody]
             }
         );
+
+        // Create notification for message received
+        try {
+            await notificationService.createNotification({
+                userId: recipient_id,
+                type: 'message_received',
+                title: 'New Message',
+                message: `You received a new message.`,
+                link: `/messages`,
+                metadata: {
+                    sender_id: sender_id,
+                    thread_id: thread_id,
+                    preview: body.substring(0, 50)
+                }
+            });
+        } catch (notifError) {
+            console.error('Failed to create message notification:', notifError);
+        }
 
         res.json({ success: true, message: "Encrypted message saved." });
     } catch (err) {

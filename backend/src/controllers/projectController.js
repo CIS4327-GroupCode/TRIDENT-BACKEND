@@ -1,5 +1,6 @@
 const { Project, Organization, ProjectReview, User } = require('../database/models');
 const { Op } = require('sequelize');
+const notificationService = require('../services/notificationService');
 
 /**
  * Browse and search public projects (for researchers)
@@ -202,6 +203,25 @@ const createProject = async (req, res) => {
       status: status || 'draft',
       org_id: organization.id, // <- key line
     });
+
+    // Create notification for project creation
+    try {
+      await notificationService.createNotification({
+        userId: userId,
+        type: 'project_created',
+        title: 'Project Created Successfully',
+        message: `Your project "${project.title}" has been created and is ready for researchers to discover.`,
+        link: `/projects/${project.project_id}`,
+        metadata: {
+          project_id: project.project_id,
+          project_title: project.title,
+          organization_id: organization.id
+        }
+      });
+    } catch (notifError) {
+      console.error('Failed to create notification:', notifError);
+      // Don't fail the request if notification fails
+    }
 
     return res.status(201).json({
       message: 'Project created successfully',
@@ -409,7 +429,37 @@ const updateProject = async (req, res) => {
       }
     }
 
+    const oldStatus = project.status;
     await project.update(updates);
+
+    // Create notification for status changes
+    if (updates.status && oldStatus !== updates.status) {
+      try {
+        const statusMessages = {
+          'open': `Your project "${project.title}" is now open for researchers to apply!`,
+          'in_progress': `Your project "${project.title}" is now in progress.`,
+          'completed': `Congratulations! Your project "${project.title}" has been completed.`,
+          'cancelled': `Your project "${project.title}" has been cancelled.`,
+          'draft': `Your project "${project.title}" has been saved as draft.`
+        };
+
+        await notificationService.createNotification({
+          userId: userId,
+          type: 'project_status_changed',
+          title: `Project Status Changed: ${updates.status}`,
+          message: statusMessages[updates.status] || `Your project status changed to ${updates.status}`,
+          link: `/projects/${project.project_id}`,
+          metadata: {
+            project_id: project.project_id,
+            project_title: project.title,
+            old_status: oldStatus,
+            new_status: updates.status
+          }
+        });
+      } catch (notifError) {
+        console.error('Failed to create status change notification:', notifError);
+      }
+    }
 
     return res.status(200).json({
       message: 'Project updated successfully',
@@ -467,7 +517,25 @@ const deleteProject = async (req, res) => {
       return res.status(404).json({ error: 'Project not found' });
     }
 
+    const projectTitle = project.title;
     await project.destroy();
+
+    // Create notification for project deletion
+    try {
+      await notificationService.createNotification({
+        userId: userId,
+        type: 'project_deleted',
+        title: 'Project Deleted',
+        message: `Your project "${projectTitle}" has been permanently deleted.`,
+        link: '/projects',
+        metadata: {
+          project_id: projectId,
+          project_title: projectTitle
+        }
+      });
+    } catch (notifError) {
+      console.error('Failed to create deletion notification:', notifError);
+    }
 
     return res.status(200).json({
       message: 'Project deleted successfully',

@@ -78,6 +78,7 @@ const researcherRoutes = require('./routes/researcherRoutes');
 const adminRoutes = require('./routes/adminRoutes');
 const projectRoutes = require('./routes/projectRoutes');
 const messageRoutes = require('./routes/messagesRoutes');
+const notificationRoutes = require('./routes/notificationRoutes');
 
 //home route just to check if server is running
 app.get('/', (req, res) => {
@@ -92,6 +93,7 @@ app.use('/api/researchers', researcherRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/projects', projectRoutes);
 app.use('/api/messages', messageRoutes);
+app.use('/api/notifications', notificationRoutes);
 
 // 404 handler for undefined routes
 app.use((req, res) => {
