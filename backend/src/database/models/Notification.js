@@ -119,6 +119,12 @@ Notification.init(
       allowNull: false,
       defaultValue: false
     },
+    archived: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+      field: 'archived'
+    },
     metadata: {
       type: DataTypes.JSONB,
       allowNull: true,
@@ -155,8 +161,16 @@ Notification.init(
         fields: ['user_id', 'is_read']
       },
       {
+        name: 'idx_notifications_user_archived',
+        fields: ['user_id', 'archived']
+      },
+      {
         name: 'idx_notifications_created',
         fields: [{ name: 'created_at', order: 'DESC' }]
+      },
+      {
+        name: 'idx_notifications_archived_created',
+        fields: ['archived', 'created_at']
       },
       {
         name: 'idx_notifications_type',

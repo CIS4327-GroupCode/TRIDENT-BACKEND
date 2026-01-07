@@ -26,6 +26,14 @@ Application.init(
       primaryKey: true,
       autoIncrement: true
     },
+    status: {
+      type: DataTypes.STRING(50),
+      allowNull: false,
+      defaultValue: 'pending',
+      validate: {
+        isIn: [['pending', 'accepted', 'rejected']]
+      }
+    },
     type: {
       type: DataTypes.STRING(255),
       allowNull: true
@@ -44,6 +52,11 @@ Application.init(
       allowNull: true,
       field: 'audit_trail'
     },
+    metadata: {
+      type: DataTypes.JSONB,
+      allowNull: true,
+      defaultValue: null
+    },
     org_id: {
       type: DataTypes.INTEGER,
       allowNull: true,
@@ -61,14 +74,28 @@ Application.init(
         key: 'user_id'
       },
       field: 'researcher_id'
+    },
+    created_at: {
+      type: DataTypes.DATE,
+      allowNull: false,
+      defaultValue: DataTypes.NOW,
+      field: 'created_at'
+    },
+    updated_at: {
+      type: DataTypes.DATE,
+      allowNull: false,
+      defaultValue: DataTypes.NOW,
+      field: 'updated_at'
     }
   },
   {
     sequelize,
     modelName: 'Application',
     tableName: 'agreements',
-    timestamps: false,
-    underscored: true
+    timestamps: true,
+    underscored: true,
+    createdAt: 'created_at',
+    updatedAt: 'updated_at'
   }
 );
 

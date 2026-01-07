@@ -430,11 +430,29 @@ const updateProject = async (req, res) => {
     }
 
     const oldStatus = project.status;
+    const oldTitle = project.title;
     await project.update(updates);
 
-    // Create notification for status changes
-    if (updates.status && oldStatus !== updates.status) {
-      try {
+    // Create notifications for updates
+    try {
+      // If title changed, it's a significant update
+      if (updates.title && oldTitle !== updates.title) {
+        await notificationService.createNotification({
+          userId: userId,
+          type: 'project_updated',
+          title: 'Project Title Updated',
+          message: `Your project has been updated from "${oldTitle}" to "${updates.title}".`,
+          link: `/projects/${project.project_id}`,
+          metadata: {
+            project_id: project.project_id,
+            project_title: updates.title,
+            old_title: oldTitle
+          }
+        });
+      }
+
+      // Notify about status changes to owner and involved researchers
+      if (updates.status && oldStatus !== updates.status) {
         const statusMessages = {
           'open': `Your project "${project.title}" is now open for researchers to apply!`,
           'in_progress': `Your project "${project.title}" is now in progress.`,
@@ -443,6 +461,7 @@ const updateProject = async (req, res) => {
           'draft': `Your project "${project.title}" has been saved as draft.`
         };
 
+        // Notify owner
         await notificationService.createNotification({
           userId: userId,
           type: 'project_status_changed',
@@ -456,9 +475,36 @@ const updateProject = async (req, res) => {
             new_status: updates.status
           }
         });
-      } catch (notifError) {
-        console.error('Failed to create status change notification:', notifError);
+
+        // Get involved researchers (those with accepted applications) and notify them
+        const { Application, User: UserModel } = require('../database/models');
+        const involvedResearchers = await Application.findAll({
+          where: {
+            org_id: project.org_id,
+            status: 'accepted'
+          }
+        });
+
+        const researcherUserIds = involvedResearchers.map(app => app.researcher_id);
+        if (researcherUserIds.length > 0) {
+          await notificationService.createBulkNotifications(
+            researcherUserIds,
+            {
+              type: 'project_status_changed',
+              title: `Project Status: ${updates.status}`,
+              message: `The project "${project.title}" you are working on has changed status to ${updates.status}.`,
+              link: `/projects/${project.project_id}`,
+              metadata: {
+                project_id: project.project_id,
+                project_title: project.title,
+                new_status: updates.status
+              }
+            }
+          );
+        }
       }
+    } catch (notifError) {
+      console.error('Failed to create update notification:', notifError);
     }
 
     return res.status(200).json({
@@ -612,6 +658,52 @@ const submitForReview = async (req, res) => {
       new_status: 'pending_review',
       reviewed_at: new Date(),
     });
+
+    // Notify owner about submission
+    try {
+      await notificationService.createNotification({
+        userId: userId,
+        type: 'project_submitted_for_review',
+        title: 'Project Submitted for Review',
+        message: `Your project "${project.title}" has been submitted for review by the admin team.`,
+        link: `/projects/${projectId}`,
+        metadata: {
+          project_id: projectId,
+          project_title: project.title,
+          submitted_at: new Date().toISOString()
+        }
+      });
+    } catch (notifError) {
+      console.error('Failed to create submission notification:', notifError);
+    }
+
+    // Notify admins about new submission
+    try {
+      const { User: UserModel } = require('../database/models');
+      const admins = await UserModel.findAll({
+        where: { role: 'admin' }
+      });
+
+      const adminIds = admins.map(admin => admin.id);
+      if (adminIds.length > 0) {
+        await notificationService.createBulkNotifications(
+          adminIds,
+          {
+            type: 'project_submitted_for_review',
+            title: 'New Project Submission',
+            message: `Project "${project.title}" from ${user.organization?.name || 'an organization'} is pending your review.`,
+            link: `/admin/projects/${projectId}`,
+            metadata: {
+              project_id: projectId,
+              project_title: project.title,
+              organization_id: user.org_id
+            }
+          }
+        );
+      }
+    } catch (notifError) {
+      console.error('Failed to notify admins:', notifError);
+    }
 
     return res.status(200).json({
       message: 'Project submitted for review successfully',

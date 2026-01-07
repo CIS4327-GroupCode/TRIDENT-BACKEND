@@ -82,7 +82,7 @@ exports.createMilestone = async (req, res) => {
       completed_at: status === 'completed' ? new Date() : null
     });
 
-    // Create notification for milestone creation
+    // Create notification for milestone creation - notify owner
     try {
       await notificationService.createNotification({
         userId: userId,
@@ -96,6 +96,33 @@ exports.createMilestone = async (req, res) => {
           project_id: projectId
         }
       });
+
+      // Notify involved researchers (those with accepted applications)
+      const { Application } = require('../database/models');
+      const involvedResearchers = await Application.findAll({
+        where: {
+          org_id: project.org_id,
+          status: 'accepted'
+        }
+      });
+
+      const researcherIds = involvedResearchers.map(app => app.researcher_id);
+      if (researcherIds.length > 0) {
+        await notificationService.createBulkNotifications(
+          researcherIds,
+          {
+            type: 'milestone_created',
+            title: 'New Milestone',
+            message: `A new milestone "${milestone.name}" has been created for the project you are collaborating on.`,
+            link: `/projects/${projectId}/milestones`,
+            metadata: {
+              milestone_id: milestone.milestone_id,
+              milestone_name: milestone.name,
+              project_id: projectId
+            }
+          }
+        );
+      }
     } catch (notifError) {
       console.error('Failed to create milestone notification:', notifError);
     }
@@ -301,9 +328,23 @@ if (project.org_id !== user.org_id) {
     const oldStatus = milestone.status;
     await milestone.update(updates);
 
-    // Create notification for milestone completion
-    if (updates.status && oldStatus !== 'completed' && updates.status === 'completed') {
-      try {
+    // Notify about milestone updates
+    try {
+      const { Application } = require('../database/models');
+      
+      // Get involved researchers
+      const involvedResearchers = await Application.findAll({
+        where: {
+          org_id: project.org_id,
+          status: 'accepted'
+        }
+      });
+
+      const researcherIds = involvedResearchers.map(app => app.researcher_id);
+
+      // Create notification for milestone completion to all collaborators
+      if (updates.status && oldStatus !== 'completed' && updates.status === 'completed') {
+        // Notify owner
         await notificationService.createNotification({
           userId: req.user.id,
           type: 'milestone_completed',
@@ -316,16 +357,71 @@ if (project.org_id !== user.org_id) {
             project_id: projectId
           }
         });
-      } catch (notifError) {
-        console.error('Failed to create milestone completion notification:', notifError);
-      }
-    }
 
-    // Create notification for milestone deadline changes
-    if (updates.due_date && oldStatus !== 'completed' && updates.status !== 'completed') {
-      try {
+        // Notify researchers
+        if (researcherIds.length > 0) {
+          await notificationService.createBulkNotifications(
+            researcherIds,
+            {
+              type: 'milestone_completed',
+              title: 'Milestone Completed',
+              message: `Milestone "${milestone.name}" for your project has been completed!`,
+              link: `/projects/${projectId}/milestones`,
+              metadata: {
+                milestone_id: milestone.id,
+                milestone_name: milestone.name,
+                project_id: projectId
+              }
+            }
+          );
+        }
+      }
+
+      // Create notification for milestone updates
+      if ((updates.name || updates.due_date) && updates.status !== 'completed') {
+        const changesSummary = [];
+        if (updates.name) changesSummary.push(`name updated to "${updates.name}"`);
+        if (updates.due_date) changesSummary.push(`due date changed`);
+
+        // Notify owner
+        await notificationService.createNotification({
+          userId: req.user.id,
+          type: 'milestone_updated',
+          title: 'Milestone Updated',
+          message: `Milestone "${milestone.name}" has been updated: ${changesSummary.join(', ')}.`,
+          link: `/projects/${projectId}/milestones`,
+          metadata: {
+            milestone_id: milestone.id,
+            milestone_name: milestone.name,
+            project_id: projectId,
+            changes: changesSummary
+          }
+        });
+
+        // Notify researchers
+        if (researcherIds.length > 0) {
+          await notificationService.createBulkNotifications(
+            researcherIds,
+            {
+              type: 'milestone_updated',
+              title: 'Milestone Updated',
+              message: `Milestone "${milestone.name}" for your project has been updated.`,
+              link: `/projects/${projectId}/milestones`,
+              metadata: {
+                milestone_id: milestone.id,
+                milestone_name: milestone.name,
+                project_id: projectId
+              }
+            }
+          );
+        }
+      }
+
+      // Create notification for milestone deadline approaching
+      if (updates.due_date && !updates.status) {
         const daysUntilDue = milestone.daysUntilDue();
-        if (daysUntilDue <= 3 && daysUntilDue > 0) {
+        if (daysUntilDue && daysUntilDue <= 3 && daysUntilDue > 0) {
+          // Notify owner
           await notificationService.createNotification({
             userId: req.user.id,
             type: 'milestone_deadline_approaching',
@@ -339,10 +435,29 @@ if (project.org_id !== user.org_id) {
               days_until_due: daysUntilDue
             }
           });
+
+          // Notify researchers
+          if (researcherIds.length > 0) {
+            await notificationService.createBulkNotifications(
+              researcherIds,
+              {
+                type: 'milestone_deadline_approaching',
+                title: 'Milestone Deadline Approaching',
+                message: `Milestone "${milestone.name}" is due in ${daysUntilDue} day${daysUntilDue !== 1 ? 's' : ''}.`,
+                link: `/projects/${projectId}/milestones`,
+                metadata: {
+                  milestone_id: milestone.id,
+                  milestone_name: milestone.name,
+                  project_id: projectId,
+                  days_until_due: daysUntilDue
+                }
+              }
+            );
+          }
         }
-      } catch (notifError) {
-        console.error('Failed to create milestone deadline notification:', notifError);
       }
+    } catch (notifError) {
+      console.error('Failed to create milestone update notification:', notifError);
     }
 
     // Add computed fields

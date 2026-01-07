@@ -79,6 +79,7 @@ const adminRoutes = require('./routes/adminRoutes');
 const projectRoutes = require('./routes/projectRoutes');
 const messageRoutes = require('./routes/messagesRoutes');
 const notificationRoutes = require('./routes/notificationRoutes');
+const applicationRoutes = require('./routes/applicationRoutes');
 
 //home route just to check if server is running
 app.get('/', (req, res) => {
@@ -94,6 +95,7 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/projects', projectRoutes);
 app.use('/api/messages', messageRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/applications', applicationRoutes);
 
 // 404 handler for undefined routes
 app.use((req, res) => {
@@ -145,6 +147,15 @@ if (process.env.VERCEL !== '1') {
       if (process.env.NODE_ENV !== 'production') {
         await sequelize.sync({ alter: false });
         console.log('✓ Database synchronized');
+      }
+
+      // Schedule notification cleanup task
+      try {
+        const notificationCleanup = require('./tasks/notificationCleanup');
+        notificationCleanup.scheduleCleanup();
+      } catch (cleanupError) {
+        console.warn('⚠ Failed to schedule notification cleanup:', cleanupError.message);
+        // Don't fail server startup if scheduling fails
       }
       
       app.listen(PORT, () => {
