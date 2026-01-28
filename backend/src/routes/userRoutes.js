@@ -3,7 +3,10 @@ const router = express.Router();
 const userController = require('../controllers/userController');
 const { authenticate } = require('../middleware/auth');
 
-// All routes require authentication
+// Public routes (no authentication required)
+router.get('/browse/researchers', userController.browseResearchers);
+
+// All routes below require authentication
 router.use(authenticate);
 
 // User profile routes

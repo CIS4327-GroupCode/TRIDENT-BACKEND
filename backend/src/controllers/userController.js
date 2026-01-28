@@ -310,6 +310,105 @@ const restoreUser = async (req, res) => {
   }
 };
 
+/**
+ * Browse and search researchers (public endpoint for nonprofits)
+ * GET /users/browse/researchers
+ * Query params: 
+ *   - expertise: filter by expertise keywords
+ *   - methods: filter by research methods
+ *   - domains: filter by domains
+ *   - minRate, maxRate: filter by hourly rate range
+ *   - search: general search across multiple fields
+ */
+const browseResearchers = async (req, res) => {
+  try {
+    const { expertise, methods, domains, minRate, maxRate, search, limit = 20, offset = 0 } = req.query;
+
+    // Build where clause for filtering
+    const where = {
+      role: 'researcher',
+      account_status: 'active'
+    };
+
+    // Build include for researcher profile with filters
+    const profileWhere = {};
+    
+    if (expertise) {
+      profileWhere.expertise = { [require('sequelize').Op.iLike]: `%${expertise}%` };
+    }
+    
+    if (methods) {
+      profileWhere.methods = { [require('sequelize').Op.iLike]: `%${methods}%` };
+    }
+    
+    if (domains) {
+      profileWhere.domains = { [require('sequelize').Op.iLike]: `%${domains}%` };
+    }
+    
+    if (minRate) {
+      profileWhere.rate_min = { [require('sequelize').Op.gte]: parseFloat(minRate) };
+    }
+    
+    if (maxRate) {
+      profileWhere.rate_max = { [require('sequelize').Op.lte]: parseFloat(maxRate) };
+    }
+
+    // General search across multiple fields
+    if (search) {
+      const { Op } = require('sequelize');
+      where[Op.or] = [
+        { name: { [Op.iLike]: `%${search}%` } },
+        { email: { [Op.iLike]: `%${search}%` } }
+      ];
+      
+      // Also search in profile fields
+      profileWhere[Op.or] = [
+        { expertise: { [Op.iLike]: `%${search}%` } },
+        { methods: { [Op.iLike]: `%${search}%` } },
+        { domains: { [Op.iLike]: `%${search}%` } },
+        { affiliation: { [Op.iLike]: `%${search}%` } }
+      ];
+    }
+
+    const researchers = await User.findAndCountAll({
+      where,
+      attributes: ['id', 'name', 'email', 'created_at'],
+      include: [
+        {
+          model: ResearcherProfile,
+          as: 'researcherProfile',
+          where: Object.keys(profileWhere).length > 0 ? profileWhere : undefined,
+          required: true, // Only include users who have researcher profiles
+          attributes: [
+            'affiliation',
+            'domains',
+            'methods',
+            'tools',
+            'rate_min',
+            'rate_max',
+            'availability',
+            'expertise',
+            'compliance_certifications'
+          ]
+        }
+      ],
+      limit: parseInt(limit),
+      offset: parseInt(offset),
+      distinct: true // For accurate count with includes
+    });
+
+    return res.status(200).json({
+      researchers: researchers.rows,
+      total: researchers.count,
+      limit: parseInt(limit),
+      offset: parseInt(offset)
+    });
+  } catch (error) {
+    console.error('Browse researchers error:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
 module.exports = {
   getUserProfile,
   updateUserProfile,
@@ -318,5 +417,6 @@ module.exports = {
   updatePreferences,
   deleteAccount,
   hardDeleteUser,
-  restoreUser
+  restoreUser,
+  browseResearchers
 };
