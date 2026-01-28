@@ -33,7 +33,7 @@ module.exports = {
       await queryInterface.addColumn('agreements', 'created_at', {
         type: Sequelize.DATE,
         allowNull: false,
-        defaultValue: Sequelize.NOW
+        defaultValue: Sequelize.literal('CURRENT_TIMESTAMP')
       });
     } catch (err) {
       if (!err.message.includes('already exists')) {
@@ -45,7 +45,7 @@ module.exports = {
       await queryInterface.addColumn('agreements', 'updated_at', {
         type: Sequelize.DATE,
         allowNull: false,
-        defaultValue: Sequelize.NOW
+        defaultValue: Sequelize.literal('CURRENT_TIMESTAMP')
       });
     } catch (err) {
       if (!err.message.includes('already exists')) {

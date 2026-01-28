@@ -13,6 +13,8 @@ const ProjectReview = require('./ProjectReview');
 const AcademicHistory = require('./AcademicHistory');
 const Certification = require('./Certification');
 const Notification = require('./Notification');
+const EmailVerification = require('./EmailVerification');
+const PasswordReset = require('./PasswordReset');
 const sequelize = require('../index');
 
 // User <-> ResearcherProfile (one-to-one)
@@ -87,6 +89,14 @@ Certification.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
 User.hasMany(Notification, { foreignKey: 'user_id', as: 'notifications' });
 Notification.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
 
+// User <-> EmailVerification (one-to-one, used for signup verification)
+User.hasOne(EmailVerification, { foreignKey: 'user_id', as: 'emailVerification' });
+EmailVerification.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
+
+// User <-> PasswordReset (one-to-one, used for password resets)
+User.hasOne(PasswordReset, { foreignKey: 'user_id', as: 'passwordReset' });
+PasswordReset.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
+
 module.exports = {
   User,
   Organization,
@@ -103,5 +113,7 @@ module.exports = {
   AcademicHistory,
   Certification,
   Notification,
+  EmailVerification,
+  PasswordReset,
   sequelize
 };

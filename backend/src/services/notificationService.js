@@ -1,9 +1,11 @@
 const Notification = require('../database/models/Notification');
 const { User, UserPreferences } = require('../database/models');
+const emailService = require('./emailService');
 
 /**
  * Notification Service
  * Provides helper functions for creating and managing notifications
+ * Integrates with email service to send notifications via email when enabled
  */
 
 /**
@@ -123,6 +125,23 @@ const createNotification = async ({ userId, type, title, message, link, metadata
       is_read: false
     });
 
+    // Send email notification if user has email notifications enabled
+    if (preferences && preferences.email_notifications) {
+      try {
+        const user = await User.findByPk(userId);
+        if (user && user.email) {
+          await emailService.sendNotificationEmail(
+            user.email,
+            user.name,
+            { type, title, message, link }
+          );
+        }
+      } catch (emailError) {
+        // Log but don't fail notification creation if email fails
+        console.error(`Failed to send email notification to user ${userId}:`, emailError.message);
+      }
+    }
+
     return notification;
   } catch (error) {
     await logNotificationFailure(userId, type, error);
@@ -186,6 +205,38 @@ const createBulkNotifications = async (userIds, { type, title, message, link, me
     }));
 
     const created = await Notification.bulkCreate(notifications);
+
+    // Send email notifications for users who have email notifications enabled
+    const emailPrefs = userPrefs.filter(pref => pref.email_notifications);
+    if (emailPrefs.length > 0) {
+      const emailUserIds = emailPrefs.map(pref => pref.user_id);
+      
+      try {
+        const users = await User.findAll({
+          where: { id: emailUserIds },
+          attributes: ['id', 'email', 'name']
+        });
+
+        // Send emails in parallel (non-blocking)
+        const emailPromises = users.map(user => 
+          emailService.sendNotificationEmail(
+            user.email,
+            user.name,
+            { type, title, message, link }
+          ).catch(error => {
+            console.error(`Failed to send email to ${user.email}:`, error.message);
+          })
+        );
+
+        // Don't await - let emails send asynchronously
+        Promise.all(emailPromises).catch(err => {
+          console.error('Bulk email notification error:', err);
+        });
+      } catch (emailError) {
+        console.error('Failed to fetch users for email notifications:', emailError.message);
+      }
+    }
+
     return created;
   } catch (error) {
     console.error('Error creating bulk notifications:', error);
