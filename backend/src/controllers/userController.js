@@ -405,7 +405,7 @@ const browseResearchers = async (req, res) => {
     });
   } catch (error) {
     console.error('Browse researchers error:', error);
-    return res.status(500).json({ error: 'Internal server error' });
+    return res.status(500).json({ error: 'Internal server error', message: error.message});
   }
 };
 
