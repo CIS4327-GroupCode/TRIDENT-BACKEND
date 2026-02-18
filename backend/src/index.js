@@ -80,6 +80,7 @@ const projectRoutes = require('./routes/projectRoutes');
 const messageRoutes = require('./routes/messagesRoutes');
 const notificationRoutes = require('./routes/notificationRoutes');
 const applicationRoutes = require('./routes/applicationRoutes');
+const matchRoutes = require('./routes/matchRoutes');
 
 //home route just to check if server is running
 app.get('/', (req, res) => {
@@ -96,6 +97,7 @@ app.use('/api/projects', projectRoutes);
 app.use('/api/messages', messageRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/applications', applicationRoutes);
+app.use('/api/matches', matchRoutes);
 
 // 404 handler for undefined routes
 app.use((req, res) => {

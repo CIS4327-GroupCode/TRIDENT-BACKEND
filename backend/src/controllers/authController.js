@@ -5,7 +5,7 @@ const { EmailVerification, PasswordReset, User } = require('../database/models')
 const emailService = require('../services/emailService');
 
 
-// Register controller
+// Register new user
 exports.register = async (req, res) => {
   try {
     const { 

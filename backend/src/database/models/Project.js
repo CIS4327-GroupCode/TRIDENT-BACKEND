@@ -52,6 +52,24 @@ Project.init(
       allowNull: true,
       field: 'budget_min'
     },
+    budget_max: {
+      type: DataTypes.DECIMAL(10, 2),
+      allowNull: true,
+      field: 'budget_max',
+      comment: 'Maximum budget for matching algorithm'
+    },
+    estimated_hours: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      field: 'estimated_hours',
+      comment: 'Expected project hours for budget compatibility'
+    },
+    start_date: {
+      type: DataTypes.DATEONLY,
+      allowNull: true,
+      field: 'start_date',
+      comment: 'Preferred start date for availability matching'
+    },
     data_sensitivity: {
       type: DataTypes.STRING(255),
       allowNull: true,

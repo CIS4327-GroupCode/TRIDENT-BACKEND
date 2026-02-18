@@ -7,6 +7,22 @@ class ResearcherProfile extends Model {
     const { ...safeProfile } = this.toJSON();
     return safeProfile;
   }
+
+  /**
+   * Check if researcher has capacity for new projects
+   * @returns {boolean} True if current < max concurrent projects
+   */
+  hasCapacity() {
+    return this.current_projects_count < this.max_concurrent_projects;
+  }
+
+  /**
+   * Get capacity utilization percentage
+   * @returns {number} Percentage of capacity used (0-100)
+   */
+  getCapacityPercentage() {
+    return (this.current_projects_count / this.max_concurrent_projects) * 100;
+  }
 }
 
 ResearcherProfile.init(
@@ -96,6 +112,26 @@ ResearcherProfile.init(
       type: DataTypes.STRING(255),
       allowNull: true,
       comment: 'Hours per week or availability schedule'
+    },
+    current_projects_count: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      defaultValue: 0,
+      field: 'current_projects_count',
+      comment: 'Number of active projects for capacity calculation'
+    },
+    max_concurrent_projects: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      defaultValue: 3,
+      field: 'max_concurrent_projects',
+      comment: 'Maximum projects researcher can handle simultaneously'
+    },
+    available_start_date: {
+      type: DataTypes.DATEONLY,
+      allowNull: true,
+      field: 'available_start_date',
+      comment: 'Earliest date available to start new projects'
     }
   },
   {

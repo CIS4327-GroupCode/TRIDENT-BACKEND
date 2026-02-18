@@ -1,6 +1,39 @@
 const { ResearcherProfile, AcademicHistory, Certification, Application, Project, Organization } = require('../database/models');
 
 /**
+ * Parse comma-separated string into array
+ * @param {string} str - Comma-separated string
+ * @returns {string[]} Array of values
+ */
+function parseCommaSeparated(str) {
+  if (!str || typeof str !== 'string') return [];
+  return str
+    .split(',')
+    .map(item => item.trim())
+    .filter(item => item.length > 0);
+}
+
+/**
+ * Calculate profile completeness percentage
+ * @param {Object} profile - Researcher profile object
+ * @returns {number} Completeness percentage (0-100)
+ */
+function computeProfileCompleteness(profile) {
+  const fields = [
+    { key: 'affiliation',        check: v => !!v },
+    { key: 'title',              check: v => !!v },
+    { key: 'expertise',          check: v => parseCommaSeparated(v).length > 0 },
+    { key: 'domains',            check: v => parseCommaSeparated(v).length > 0 },
+    { key: 'methods',            check: v => parseCommaSeparated(v).length > 0 },
+    { key: 'hourly_rate_min',    check: v => !!v && parseFloat(v) > 0 },
+    { key: 'research_interests', check: v => v && v.length >= 20 },
+    { key: 'availability',       check: v => !!v },
+  ];
+  const filled = fields.filter(f => f.check(profile[f.key])).length;
+  return Math.round((filled / fields.length) * 100);
+}
+
+/**
  * Get current user's researcher profile
  * GET /researchers/me
  */
@@ -19,7 +52,10 @@ const getResearcherProfile = async (req, res) => {
       return res.status(404).json({ error: 'Researcher profile not found' });
     }
 
-    return res.status(200).json({ profile });
+    // Calculate and include completeness
+    const completeness = computeProfileCompleteness(profile.toJSON());
+
+    return res.status(200).json({ profile, completeness });
   } catch (error) {
     console.error('Get researcher profile error:', error);
     return res.status(500).json({ error: 'Internal server error' });
@@ -41,15 +77,19 @@ const updateResearcherProfile = async (req, res) => {
 
     const allowedFields = [
       'title',
+      'affiliation',
       'institution',
+      'domains',
+      'methods',
+      'tools',
       'expertise',
       'research_interests',
-      'bio',
-      'projects_completed',
+      'compliance_certifications',
       'hourly_rate_min',
       'hourly_rate_max',
-      'available_hours',
-      'preferred_project_types'
+      'availability',
+      'max_concurrent_projects',
+      'projects_completed'
     ];
 
     // Filter only allowed fields from request body
@@ -77,12 +117,20 @@ const updateResearcherProfile = async (req, res) => {
       return res.status(404).json({ error: 'Researcher profile not found' });
     }
 
+    // Sync rate aliases for backward compatibility
+    if (updates.hourly_rate_min !== undefined) updates.rate_min = updates.hourly_rate_min;
+    if (updates.hourly_rate_max !== undefined) updates.rate_max = updates.hourly_rate_max;
+
     // Update profile
     await profile.update(updates);
 
+    // Calculate and include completeness
+    const completeness = computeProfileCompleteness(profile.toJSON());
+
     return res.status(200).json({ 
       message: 'Researcher profile updated successfully',
-      profile 
+      profile,
+      completeness
     });
   } catch (error) {
     console.error('Update researcher profile error:', error);

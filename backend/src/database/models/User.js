@@ -57,7 +57,7 @@ User.init(
     account_status: {
       type: DataTypes.ENUM('active', 'pending', 'suspended'),
       allowNull: false,
-      defaultValue: 'active'
+      defaultValue: 'pending'
     },
     mfa_enabled: {
       type: DataTypes.BOOLEAN,

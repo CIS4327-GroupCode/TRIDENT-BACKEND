@@ -17,13 +17,31 @@ Match.init(
       autoIncrement: true
     },
     score: {
-      type: DataTypes.STRING(255),
-      allowNull: true
+      type: DataTypes.DECIMAL(5, 2),
+      allowNull: true,
+      comment: 'Match score from 0.00 to 100.00'
+    },
+    score_breakdown: {
+      type: DataTypes.JSONB,
+      allowNull: true,
+      comment: 'Detailed scoring by factor (expertise, methods, budget, etc.)'
     },
     reason_codes: {
       type: DataTypes.STRING(255),
       allowNull: true,
       field: 'reason_codes'
+    },
+    dismissed: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+      comment: 'User dismissed this match'
+    },
+    calculated_at: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      defaultValue: DataTypes.NOW,
+      comment: 'When score was calculated'
     },
     brief_id: {
       type: DataTypes.INTEGER,
