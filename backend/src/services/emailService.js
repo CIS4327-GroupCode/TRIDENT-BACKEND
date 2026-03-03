@@ -305,6 +305,32 @@ const sendNotificationEmail = async (email, name, notification) => {
   return await transporter.sendMail(mailOptions);
 };
 
+
+/* Emails the user a code to enable 2fa
+* they have to login with an email every login
+*/
+const sendTwoFactorCodeEmail = async (email, name, code, purpose = "enable") => {
+  const subject =
+    purpose === "login" ? "Your TRIDENT login code" : "Your TRIDENT 2FA setup code";
+
+  const html = `
+    <h2>${subject}</h2>
+    <p>Hi ${name || ""},</p>
+    <p>Your verification code is:</p>
+    <h1 style="letter-spacing:6px">${code}</h1>
+    <p>This code expires in 10 minutes.</p>
+  `;
+
+  return await transporter.sendMail({
+    from: process.env.SMTP_FROM || '"TRIDENT Match Portal" <noreply@trident.example.com>',
+    to: email,
+    subject,
+    html,
+    text: `Your verification code is: ${code} (expires in 10 minutes)`
+  });
+};
+
+
 /**
  * Send weekly digest email
  * @param {string} email - Recipient email address
