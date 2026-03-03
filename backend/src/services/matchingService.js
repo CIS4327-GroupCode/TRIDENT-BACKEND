@@ -327,7 +327,12 @@ async function findMatchesForProject(projectId, options) {
           compliance_certifications: researcher.compliance_certifications,
           rate_min: researcher.hourly_rate_min || researcher.rate_min,
           rate_max: researcher.hourly_rate_max || researcher.rate_max,
+          hourly_rate_min: researcher.hourly_rate_min,
+          hourly_rate_max: researcher.hourly_rate_max,
           availability: researcher.availability,
+          available_start_date: researcher.available_start_date,
+          current_projects_count: researcher.current_projects_count,
+          max_concurrent_projects: researcher.max_concurrent_projects,
           projects_completed: researcher.projects_completed
         },
         matchScore: scoreData.totalScore,

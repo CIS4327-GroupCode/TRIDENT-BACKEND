@@ -1,4 +1,4 @@
-const { ResearcherProfile, AcademicHistory, Certification, Application, Project, Organization } = require('../database/models');
+const { ResearcherProfile, AcademicHistory, Certification, Application, Project, Organization, User } = require('../database/models');
 
 /**
  * Parse comma-separated string into array
@@ -434,6 +434,56 @@ const getResearcherProjects = async (req, res) => {
   }
 };
 
+/**
+ * Get a researcher's public profile by user ID
+ * GET /researchers/:id
+ * Auth: any authenticated user (nonprofit, researcher, admin)
+ */
+const getResearcherProfileById = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const profile = await ResearcherProfile.findOne({
+      where: { user_id: id }
+    });
+
+    if (!profile) {
+      return res.status(404).json({ error: 'Researcher profile not found' });
+    }
+
+    // Fetch user info (only active, non-deleted users)
+    const user = await User.findOne({
+      where: { id, account_status: 'active', deleted_at: null },
+      attributes: ['id', 'name', 'email', 'role']
+    });
+
+    if (!user) {
+      return res.status(404).json({ error: 'Researcher not found' });
+    }
+
+    // Fetch academic history and certifications
+    const academics = await AcademicHistory.findAll({
+      where: { user_id: id },
+      order: [['year', 'DESC']]
+    });
+
+    const certifications = await Certification.findAll({
+      where: { user_id: id },
+      order: [['year', 'DESC']]
+    });
+
+    return res.status(200).json({
+      profile: profile.toSafeObject(),
+      user: user.toSafeObject(),
+      academics,
+      certifications
+    });
+  } catch (error) {
+    console.error('Get researcher profile by ID error:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
 module.exports = {
   getResearcherProfile,
   updateResearcherProfile,
@@ -445,5 +495,6 @@ module.exports = {
   createCertification,
   updateCertification,
   deleteCertification,
-  getResearcherProjects
+  getResearcherProjects,
+  getResearcherProfileById
 };

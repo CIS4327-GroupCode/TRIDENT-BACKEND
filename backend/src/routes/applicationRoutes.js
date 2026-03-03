@@ -24,6 +24,34 @@ router.get(
 );
 
 /**
+ * Invitation routes
+ */
+
+// Invite a researcher to a project (nonprofit only)
+router.post(
+  '/invite',
+  authenticate,
+  requireNonprofit,
+  applicationController.inviteResearcher
+);
+
+// Get researcher's invitations (researcher only)
+router.get(
+  '/invitations',
+  authenticate,
+  requireResearcher,
+  applicationController.getResearcherInvitations
+);
+
+// Accept or decline an invitation (researcher only)
+router.post(
+  '/:applicationId/respond',
+  authenticate,
+  requireResearcher,
+  applicationController.respondToInvitation
+);
+
+/**
  * Nonprofit-only routes
  */
 
