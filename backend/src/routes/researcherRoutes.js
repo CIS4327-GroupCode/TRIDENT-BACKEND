@@ -3,27 +3,27 @@ const router = express.Router();
 const researcherController = require('../controllers/researcherController');
 const { authenticate, requireResearcher } = require('../middleware/auth');
 
-// All routes require authentication and researcher role
-router.use(authenticate);
-router.use(requireResearcher);
+// Researcher profile settings routes (require researcher role)
+router.get('/me', authenticate, requireResearcher, researcherController.getResearcherProfile);
+router.put('/me', authenticate, requireResearcher, researcherController.updateResearcherProfile);
 
-// Researcher profile settings routes
-router.get('/me', researcherController.getResearcherProfile);
-router.put('/me', researcherController.updateResearcherProfile);
+// Academic history routes (require researcher role)
+router.get('/me/academic', authenticate, requireResearcher, researcherController.getAcademicHistory);
+router.post('/me/academic', authenticate, requireResearcher, researcherController.createAcademicHistory);
+router.put('/me/academic/:id', authenticate, requireResearcher, researcherController.updateAcademicHistory);
+router.delete('/me/academic/:id', authenticate, requireResearcher, researcherController.deleteAcademicHistory);
 
-// Academic history routes
-router.get('/me/academic', researcherController.getAcademicHistory);
-router.post('/me/academic', researcherController.createAcademicHistory);
-router.put('/me/academic/:id', researcherController.updateAcademicHistory);
-router.delete('/me/academic/:id', researcherController.deleteAcademicHistory);
+// Certification routes (require researcher role)
+router.get('/me/certifications', authenticate, requireResearcher, researcherController.getCertifications);
+router.post('/me/certifications', authenticate, requireResearcher, researcherController.createCertification);
+router.put('/me/certifications/:id', authenticate, requireResearcher, researcherController.updateCertification);
+router.delete('/me/certifications/:id', authenticate, requireResearcher, researcherController.deleteCertification);
 
-// Certification routes
-router.get('/me/certifications', researcherController.getCertifications);
-router.post('/me/certifications', researcherController.createCertification);
-router.put('/me/certifications/:id', researcherController.updateCertification);
-router.delete('/me/certifications/:id', researcherController.deleteCertification);
+// Projects routes (require researcher role)
+router.get('/me/projects', authenticate, requireResearcher, researcherController.getResearcherProjects);
 
-// Projects routes
-router.get('/me/projects', researcherController.getResearcherProjects);
+// Public profile view (any authenticated user — nonprofits, researchers, admins)
+// Must be AFTER /me routes so Express doesn't match "me" as :id
+router.get('/:id', authenticate, researcherController.getResearcherProfileById);
 
 module.exports = router;
