@@ -26,13 +26,13 @@ const Organization = require('../database/models/Organization');
 const getProjectMatches = async (req, res) => {
   try {
     const { projectId } = req.params;
-    const { limit = 20, offset = 0, minScore = 50 } = req.query;
+    const { limit = 20, offset = 0, minScore = 10 } = req.query;
     
     // Validate parameters
     const validLimit = Math.min(Math.max(parseInt(limit) || 20, 1), 100);
     const validOffset = Math.max(parseInt(offset) || 0, 0);
-    const validMinScore = Math.max(Math.min(parseFloat(minScore) || 50, 100), 0);
-    
+    const validMinScore = Math.max(Math.min(parseFloat(minScore) ?? 10, 100), 0);
+
     // Verify project exists and user has access
     const project = await Project.findByPk(projectId, {
       include: [{
@@ -98,13 +98,13 @@ const getProjectMatches = async (req, res) => {
  */
 const getResearcherMatches = async (req, res) => {
   try {
-    const { limit = 20, offset = 0, minScore = 50 } = req.query;
+    const { limit = 20, offset = 0, minScore = 10 } = req.query;
     
     // Validate parameters
     const validLimit = Math.min(Math.max(parseInt(limit) || 20, 1), 100);
     const validOffset = Math.max(parseInt(offset) || 0, 0);
-    const validMinScore = Math.max(Math.min(parseFloat(minScore) || 50, 100), 0);
-    
+    const validMinScore = Math.max(Math.min(parseFloat(minScore) ?? 10, 100), 0);
+
     // Check authentication
     if (!req.user || !req.user.id) {
       return res.status(401).json({

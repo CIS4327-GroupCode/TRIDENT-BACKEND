@@ -373,7 +373,7 @@ async function findMatchesForResearcher(researcherId, options = {}) {
   const {
     limit = 20,
     offset = 0,
-    minScore = 50
+    minScore = 10
   } = options;
   
   // Fetch researcher profile
