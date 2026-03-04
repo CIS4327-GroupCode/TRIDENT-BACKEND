@@ -368,7 +368,7 @@ exports.sendEnable2FACode = async (req, res) => {
     }
 
     // Generate 6-digit code
-    const code = String(crypto.randomInt(100000, 1000000));
+    const code = String(crypto.randomInt(100000, 999999));
 
     // Hash it (using bcryptjs already in this file)
     const code_hash = await bcrypt.hash(code, 10);
