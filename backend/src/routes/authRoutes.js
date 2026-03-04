@@ -15,5 +15,9 @@ router.post('/resend-verification-email', authController.resendVerificationEmail
 router.post('/request-password-reset', authController.requestPasswordReset);
 router.post('/reset-password', authController.resetPassword);
 
+// Enable 2 Factor authentication route
+router.post('/2fa/send-enable', authenticate, authController.sendEnable2FACode);
+router.post('/2fa/verify-enable', authenticate, authController.verifyEnable2FACode);
+
 
 module.exports = router;

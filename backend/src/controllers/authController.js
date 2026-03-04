@@ -354,6 +354,104 @@ exports.requestPasswordReset = async (req, res) => {
   }
 };
 
+
+// Send a code to enable 2FA
+exports.sendEnable2FACode = async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    // If already enabled, don't spam
+    const user = await User.findByPk(userId);
+    if (!user) return res.status(404).json({ error: "User not found" });
+    if (user.mfa_enabled) {
+      return res.status(400).json({ error: "2FA is already enabled" });
+    }
+
+    // Generate 6-digit code
+    const code = String(crypto.randomInt(100000, 999999));
+
+    // Hash it (using bcryptjs already in this file)
+    const code_hash = await bcrypt.hash(code, 10);
+
+    // Store it (10 min expiry)
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+
+    await TwoFactorCode.create({
+      user_id: userId,
+      purpose: "enable",
+      code_hash,
+      expires_at: expiresAt,
+      attempts: 0,
+      consumed_at: null
+    });
+
+    // Send email using your existing nodemailer service
+    await emailService.sendTwoFactorCodeEmail(user.email, user.name, code, "enable");
+
+    return res.json({ message: "2FA code sent to your email." });
+  } catch (err) {
+    console.error("sendEnable2FACode error", err);
+    return res.status(500).json({ error: "Failed to send 2FA code" });
+  }
+};
+
+//To verify the code from email
+exports.verifyEnable2FACode = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { code } = req.body;
+
+    if (!code) {
+      return res.status(400).json({ error: "Code is required" });
+    }
+
+    const record = await TwoFactorCode.findOne({
+      where: {
+        user_id: userId,
+        purpose: "enable",
+        consumed_at: null
+      },
+      order: [["created_at", "DESC"]]
+    });
+
+    if (!record) {
+      return res.status(400).json({ error: "No active 2FA code found." });
+    }
+
+    if (record.expires_at < new Date()) {
+      return res.status(400).json({ error: "Code expired." });
+    }
+
+    if (record.attempts >= 5) {
+      return res.status(429).json({ error: "Too many attempts." });
+    }
+
+    const valid = await bcrypt.compare(code, record.code_hash);
+
+    if (!valid) {
+      record.attempts += 1;
+      await record.save();
+      return res.status(400).json({ error: "Invalid code." });
+    }
+
+    // Mark as used
+    record.consumed_at = new Date();
+    await record.save();
+
+    // Enable MFA
+    await User.update(
+      { mfa_enabled: true },
+      { where: { id: userId } }
+    );
+
+    return res.json({ message: "Two-factor authentication enabled." });
+
+  } catch (err) {
+    console.error("verifyEnable2FACode error", err);
+    return res.status(500).json({ error: "Verification failed." });
+  }
+};
+
 // Reset password endpoint
 exports.resetPassword = async (req, res) => {
   try {
