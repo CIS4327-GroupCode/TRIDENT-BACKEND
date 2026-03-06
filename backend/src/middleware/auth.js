@@ -20,7 +20,7 @@ const authenticate = async (req, res, next) => {
 
     // Check if user exists and is not deleted
     const user = await User.findByPk(decoded.userId, {
-      attributes: ['id', 'name', 'email', 'role', 'account_status', 'deleted_at'],
+      attributes: ['id', 'name', 'email', 'role', 'account_status', 'deleted_at', 'org_id'],
       paranoid: false  // Include soft-deleted users for explicit checking
     });
 
