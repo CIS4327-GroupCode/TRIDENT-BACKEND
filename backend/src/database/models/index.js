@@ -15,6 +15,7 @@ const Certification = require('./Certification');
 const Notification = require('./Notification');
 const EmailVerification = require('./EmailVerification');
 const PasswordReset = require('./PasswordReset');
+const TwoFactorCode = require('./TwoFactorCode');
 const sequelize = require('../index');
 
 // User <-> ResearcherProfile (one-to-one)
@@ -97,6 +98,10 @@ EmailVerification.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
 User.hasOne(PasswordReset, { foreignKey: 'user_id', as: 'passwordReset' });
 PasswordReset.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
 
+// User <-> TwoFactorCode (one-to-many, used for 2FA verification)
+User.hasMany(TwoFactorCode, { foreignKey: 'user_id', as: 'twoFactorCodes' });
+TwoFactorCode.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
+
 module.exports = {
   User,
   Organization,
@@ -115,5 +120,6 @@ module.exports = {
   Notification,
   EmailVerification,
   PasswordReset,
+  TwoFactorCode,
   sequelize
 };

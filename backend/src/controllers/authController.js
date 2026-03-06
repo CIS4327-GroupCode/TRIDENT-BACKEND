@@ -1,7 +1,9 @@
+const crypto = require('crypto');
 const authModels = require("../models/authModel");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const { EmailVerification, PasswordReset, User } = require('../database/models');
+const TwoFactorCode = require('../database/models/TwoFactorCode');
 const emailService = require('../services/emailService');
 
 
