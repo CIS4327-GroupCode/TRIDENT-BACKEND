@@ -1,5 +1,13 @@
 const { User, Organization, ResearcherProfile } = require("../database/models");
 
+const parseArrayField = (value) => {
+  if (Array.isArray(value)) return value;
+  if (typeof value === 'string') {
+    return value.split(',').map((item) => item.trim()).filter(Boolean);
+  }
+  return null;
+};
+
 // REGISTER ROUTE
 const findUserByEmail = async (email) => {  
     const exists = await User.findOne({ 
@@ -26,15 +34,21 @@ const createUser = async (name, email, password_hash, role, mfa_enabled, organiz
 
       // If nonprofit, create organization profile
       if (role === 'nonprofit' && organizationData) {
-        await Organization.create({
-          id: user.id, // Link to user ID
+        const organization = await Organization.create({
           name: organizationData.name || name,
           EIN: organizationData.EIN || null,
           mission: organizationData.mission || null,
           focus_tags: organizationData.focus_tags ? JSON.stringify(organizationData.focus_tags) : null,
           compliance_flags: organizationData.compliance_flags ? JSON.stringify(organizationData.compliance_flags) : null,
-          contacts: organizationData.contacts ? JSON.stringify(organizationData.contacts) : null
+          contacts: organizationData.contacts ? JSON.stringify(organizationData.contacts) : null,
+          user_id: user.id,
+          website: organizationData.website || organizationData.contacts?.website || null,
+          focus_areas: parseArrayField(organizationData.focus_areas || organizationData.focus_tags)
         }, { transaction });
+
+        // Ensure downstream flows use the same org_id reference for nonprofit ownership checks.
+        user.org_id = organization.id;
+        await user.save({ transaction });
       }
 
       // If researcher, create researcher profile
@@ -59,6 +73,7 @@ const createUser = async (name, email, password_hash, role, mfa_enabled, organiz
         name: user.name,
         email: user.email,
         role: user.role,
+        org_id: user.org_id || null,
         created_at: user.created_at
       };
     } catch (error) {
@@ -71,7 +86,7 @@ const createUser = async (name, email, password_hash, role, mfa_enabled, organiz
 const getUserByEmail = async (email) => {
     const user = await User.findOne({ 
       where: { email },
-      attributes: ['id', 'name', 'email', 'role', 'created_at', 'password_hash']
+      attributes: ['id', 'name', 'email', 'role', 'org_id', 'created_at', 'password_hash']
     });
     
     if (!user) return null;

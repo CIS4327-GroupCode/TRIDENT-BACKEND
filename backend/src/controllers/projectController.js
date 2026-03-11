@@ -1,4 +1,10 @@
-const { Project, Organization, ProjectReview, User } = require('../database/models');
+const {
+  Project,
+  Organization,
+  ProjectReview,
+  User,
+  SavedProject,
+} = require('../database/models');
 const { Op } = require('sequelize');
 const notificationService = require('../services/notificationService');
 
@@ -40,11 +46,28 @@ const browseProjects = async (req, res) => {
     }
 
     // Filter by budget range
-    if (budget_min) {
-      whereClause.budget_min = { [Op.gte]: parseFloat(budget_min) };
-    }
-    if (budget_max) {
-      whereClause.budget_min = { [Op.lte]: parseFloat(budget_max) };
+    if (budget_min !== undefined || budget_max !== undefined) {
+      const budgetRange = {};
+
+      if (budget_min !== undefined && budget_min !== '') {
+        const parsedMin = parseFloat(budget_min);
+        if (Number.isNaN(parsedMin)) {
+          return res.status(400).json({ error: 'budget_min must be a valid number' });
+        }
+        budgetRange[Op.gte] = parsedMin;
+      }
+
+      if (budget_max !== undefined && budget_max !== '') {
+        const parsedMax = parseFloat(budget_max);
+        if (Number.isNaN(parsedMax)) {
+          return res.status(400).json({ error: 'budget_max must be a valid number' });
+        }
+        budgetRange[Op.lte] = parsedMax;
+      }
+
+      if (Reflect.ownKeys(budgetRange).length > 0) {
+        whereClause.budget_min = budgetRange;
+      }
     }
 
     // Filter by data sensitivity
@@ -86,6 +109,182 @@ const browseProjects = async (req, res) => {
     });
   } catch (error) {
     console.error('Browse projects error:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+/**
+ * Get featured public projects for home page
+ * GET /projects/browse/featured
+ */
+const getFeaturedProjects = async (req, res) => {
+  try {
+    const requestedLimit = parseInt(req.query.limit, 10);
+    const limit = Number.isInteger(requestedLimit)
+      ? Math.max(1, Math.min(requestedLimit, 12))
+      : 3;
+
+    const featuredProjects = await Project.findAll({
+      where: { status: 'open' },
+      include: [
+        {
+          model: Organization,
+          as: 'organization',
+          attributes: ['id', 'name', 'mission', 'focus_tags'],
+        },
+      ],
+      order: [['project_id', 'DESC']],
+      limit,
+    });
+
+    return res.status(200).json({ featuredProjects });
+  } catch (error) {
+    console.error('Get featured projects error:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+/**
+ * Get public platform metrics for home page
+ * GET /projects/browse/metrics
+ */
+const getPublicPlatformMetrics = async (req, res) => {
+  try {
+    const [
+      activeBriefs,
+      totalProjects,
+      projectsDelivered,
+      researchersOnboarded,
+      nonprofitPartners,
+    ] = await Promise.all([
+      Project.count({ where: { status: 'open' } }),
+      Project.count(),
+      Project.count({ where: { status: 'completed' } }),
+      User.count({ where: { role: 'researcher', account_status: 'active' } }),
+      User.count({ where: { role: 'nonprofit', account_status: 'active' } }),
+    ]);
+
+    return res.status(200).json({
+      metrics: {
+        activeBriefs,
+        totalProjects,
+        projectsDelivered,
+        researchersOnboarded,
+        nonprofitPartners,
+      },
+    });
+  } catch (error) {
+    console.error('Get public platform metrics error:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+/**
+ * Save a project for later (researchers only)
+ * POST /projects/:id/save
+ */
+const saveProject = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const projectId = parseInt(req.params.id, 10);
+
+    if (!Number.isInteger(projectId)) {
+      return res.status(400).json({ error: 'Invalid project id' });
+    }
+
+    const project = await Project.findOne({
+      where: {
+        project_id: projectId,
+        status: 'open',
+      },
+    });
+
+    if (!project) {
+      return res.status(404).json({ error: 'Project not found or not available' });
+    }
+
+    const [savedProject, created] = await SavedProject.findOrCreate({
+      where: {
+        user_id: userId,
+        project_id: projectId,
+      },
+      defaults: {
+        user_id: userId,
+        project_id: projectId,
+      },
+    });
+
+    return res.status(created ? 201 : 200).json({
+      message: created ? 'Project saved successfully' : 'Project already saved',
+      savedProject,
+    });
+  } catch (error) {
+    console.error('Save project error:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+/**
+ * Remove a saved project (researchers only)
+ * DELETE /projects/:id/save
+ */
+const unsaveProject = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const projectId = parseInt(req.params.id, 10);
+
+    if (!Number.isInteger(projectId)) {
+      return res.status(400).json({ error: 'Invalid project id' });
+    }
+
+    const deletedCount = await SavedProject.destroy({
+      where: {
+        user_id: userId,
+        project_id: projectId,
+      },
+    });
+
+    if (!deletedCount) {
+      return res.status(404).json({ error: 'Saved project not found' });
+    }
+
+    return res.status(200).json({ message: 'Saved project removed successfully' });
+  } catch (error) {
+    console.error('Unsave project error:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+/**
+ * List authenticated researcher's saved projects
+ * GET /projects/saved
+ */
+const getSavedProjects = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const savedProjects = await SavedProject.findAll({
+      where: { user_id: userId },
+      include: [
+        {
+          model: Project,
+          as: 'project',
+          include: [
+            {
+              model: Organization,
+              as: 'organization',
+              attributes: ['id', 'name', 'mission', 'focus_tags'],
+            },
+          ],
+        },
+      ],
+      order: [['created_at', 'DESC']],
+    });
+
+    return res.status(200).json({
+      savedProjects: savedProjects.map((entry) => entry.project).filter(Boolean),
+    });
+  } catch (error) {
+    console.error('Get saved projects error:', error);
     return res.status(500).json({ error: 'Internal server error' });
   }
 };
@@ -717,7 +916,12 @@ const submitForReview = async (req, res) => {
 
 module.exports = {
   browseProjects,
+  getFeaturedProjects,
+  getPublicPlatformMetrics,
   getPublicProject,
+  saveProject,
+  unsaveProject,
+  getSavedProjects,
   createProject,
   getProjects,
   getProject,
