@@ -10,6 +10,7 @@ const Message = require('./Message');
 const AuditLog = require('./AuditLog');
 const UserPreferences = require('./UserPreferences');
 const ProjectReview = require('./ProjectReview');
+const SavedProject = require('./SavedProject');
 const AcademicHistory = require('./AcademicHistory');
 const Certification = require('./Certification');
 const Notification = require('./Notification');
@@ -102,6 +103,14 @@ PasswordReset.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
 User.hasMany(TwoFactorCode, { foreignKey: 'user_id', as: 'twoFactorCodes' });
 TwoFactorCode.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
 
+// User <-> SavedProject
+User.hasMany(SavedProject, { foreignKey: 'user_id', as: 'savedProjects' });
+SavedProject.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
+
+// Project <-> SavedProject
+Project.hasMany(SavedProject, { foreignKey: 'project_id', as: 'savedEntries' });
+SavedProject.belongsTo(Project, { foreignKey: 'project_id', as: 'project' });
+
 module.exports = {
   User,
   Organization,
@@ -115,6 +124,7 @@ module.exports = {
   AuditLog,
   UserPreferences,
   ProjectReview,
+  SavedProject,
   AcademicHistory,
   Certification,
   Notification,

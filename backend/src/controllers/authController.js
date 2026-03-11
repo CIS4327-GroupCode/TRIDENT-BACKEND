@@ -6,6 +6,18 @@ const { EmailVerification, PasswordReset, User } = require('../database/models')
 const TwoFactorCode = require('../database/models/TwoFactorCode');
 const emailService = require('../services/emailService');
 
+const PASSWORD_POLICY_MESSAGE = 'Password must be at least 8 characters and include uppercase, lowercase, number, and special character.';
+
+function isStrongPassword(password) {
+  const value = String(password || '');
+  if (value.length < 8) return false;
+  if (!/[A-Z]/.test(value)) return false;
+  if (!/[a-z]/.test(value)) return false;
+  if (!/[0-9]/.test(value)) return false;
+  if (!/[^A-Za-z0-9]/.test(value)) return false;
+  return true;
+}
+
 
 // Register new user
 exports.register = async (req, res) => {
@@ -24,6 +36,10 @@ exports.register = async (req, res) => {
       return res
         .status(400)
         .json({ error: "name, email and password are required" });
+
+    if (!isStrongPassword(password)) {
+      return res.status(400).json({ error: PASSWORD_POLICY_MESSAGE });
+    }
 
     // Validate role
     const validRoles = ['researcher', 'nonprofit', 'admin'];
@@ -127,11 +143,11 @@ exports.login = async (req, res) => {
     // get user by email - getUserByEmail
     const found = await authModels.getUserByEmail(normEmail);
     if (!found)
-      return res.status(401).json({ error: "invalid email" });
+      return res.status(401).json({ error: "Invalid credentials" });
     // check password
     const ok = await bcrypt.compare(password, found.password_hash || "");
     if (!ok)
-      return res.status(401).json({ error: "invalid password" });
+      return res.status(401).json({ error: "Invalid credentials" });
 
     // Check if email is verified
     const pendingVerification = await EmailVerification.findByUserId(found.id);
@@ -160,6 +176,7 @@ exports.login = async (req, res) => {
       name: found.name,
       email: found.email,
       role: found.role,
+      org_id: found.org_id || null,
       created_at: found.created_at,
     };
 
@@ -463,8 +480,8 @@ exports.resetPassword = async (req, res) => {
       return res.status(400).json({ error: 'Token and new password are required' });
     }
 
-    if (String(password).length < 8) {
-      return res.status(400).json({ error: 'Password must be at least 8 characters long' });
+    if (!isStrongPassword(password)) {
+      return res.status(400).json({ error: PASSWORD_POLICY_MESSAGE });
     }
 
     let decoded;

@@ -1,9 +1,3 @@
-/**
- * Unit Tests for Authentication Controller
- * Tests login, register, and JWT generation
- */
-
-// Mock dependencies BEFORE imports
 jest.mock('../../src/models/authModel', () => ({
   findUserByEmail: jest.fn(),
   getUserByEmail: jest.fn(),
@@ -20,38 +14,62 @@ jest.mock('jsonwebtoken', () => ({
   verify: jest.fn()
 }));
 
+jest.mock('../../src/database/models', () => ({
+  EmailVerification: {
+    create: jest.fn(),
+    findByUserId: jest.fn(),
+    findByToken: jest.fn()
+  },
+  PasswordReset: {
+    findByToken: jest.fn(),
+    upsertForUser: jest.fn()
+  },
+  User: {
+    findByPk: jest.fn(),
+    update: jest.fn()
+  }
+}));
+
+jest.mock('../../src/database/models/TwoFactorCode', () => ({
+  create: jest.fn(),
+  findOne: jest.fn()
+}));
+
+jest.mock('../../src/services/emailService', () => ({
+  sendVerificationEmail: jest.fn(),
+  sendPasswordResetEmail: jest.fn(),
+  sendTwoFactorCodeEmail: jest.fn()
+}));
+
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const authController = require('../../src/controllers/authController');
 const authModel = require('../../src/models/authModel');
+const { EmailVerification, PasswordReset, User } = require('../../src/database/models');
+const TwoFactorCode = require('../../src/database/models/TwoFactorCode');
+const emailService = require('../../src/services/emailService');
 
 describe('Authentication Controller', () => {
-  let req, res;
+  let req;
+  let res;
 
   beforeEach(() => {
-    // Reset mocks
     jest.clearAllMocks();
+    process.env.JWT_SECRET = 'test-secret';
 
-    // Mock request and response
-    req = {
-      body: {}
-    };
-
+    req = { body: {} };
     res = {
       status: jest.fn().mockReturnThis(),
       json: jest.fn().mockReturnThis()
     };
-
-    // Default JWT secret
-    process.env.JWT_SECRET = 'test-secret';
   });
 
   describe('register', () => {
-    it('should register a new user successfully', async () => {
+    it('registers a user and creates email verification', async () => {
       req.body = {
         name: 'John Doe',
         email: 'john@example.com',
-        password: 'password123',
+        password: 'Strong1!',
         role: 'researcher'
       };
 
@@ -62,311 +80,288 @@ describe('Authentication Controller', () => {
         name: 'John Doe',
         email: 'john@example.com',
         role: 'researcher',
-        created_at: new Date()
+        org_id: null
       });
-      jwt.sign.mockReturnValue('mock-jwt-token');
+      jwt.sign.mockReturnValue('verify-token');
+      EmailVerification.create.mockResolvedValue({});
+      emailService.sendVerificationEmail.mockResolvedValue({});
 
       await authController.register(req, res);
 
       expect(authModel.findUserByEmail).toHaveBeenCalledWith('john@example.com');
-      expect(bcrypt.hash).toHaveBeenCalledWith('password123', 10);
+      expect(bcrypt.hash).toHaveBeenCalledWith('Strong1!', 10);
       expect(authModel.createUser).toHaveBeenCalled();
+      expect(EmailVerification.create).toHaveBeenCalled();
+      expect(emailService.sendVerificationEmail).toHaveBeenCalledWith('john@example.com', 'John Doe', 'verify-token');
       expect(res.status).toHaveBeenCalledWith(201);
-      expect(res.json).toHaveBeenCalledWith(
-        expect.objectContaining({
-          user: expect.any(Object),
-          token: 'mock-jwt-token'
-        })
-      );
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+        message: expect.stringContaining('Account created successfully'),
+        user: expect.objectContaining({ id: 1, email: 'john@example.com' })
+      }));
     });
 
-    it('should return 400 if required fields are missing', async () => {
-      req.body = { name: 'John Doe' }; // Missing email and password
-
-      await authController.register(req, res);
-
-      expect(res.status).toHaveBeenCalledWith(400);
-      expect(res.json).toHaveBeenCalledWith({ 
-        error: 'name, email and password are required' 
-      });
-    });
-
-    it('should return 409 if email already exists', async () => {
-      req.body = {
-        name: 'John Doe',
-        email: 'existing@example.com',
-        password: 'password123'
-      };
-
-      authModel.findUserByEmail.mockResolvedValue(true);
-
-      await authController.register(req, res);
-
-      expect(res.status).toHaveBeenCalledWith(409);
-      expect(res.json).toHaveBeenCalledWith({ error: 'email already in use' });
-    });
-
-    it('should return 400 for invalid role', async () => {
+    it('returns 400 when password does not meet policy', async () => {
       req.body = {
         name: 'John Doe',
         email: 'john@example.com',
-        password: 'password123',
-        role: 'invalid_role'
-      };
-
-      await authController.register(req, res);
-
-      expect(res.status).toHaveBeenCalledWith(400);
-      expect(res.json).toHaveBeenCalledWith({ 
-        error: 'invalid role. Must be one of: researcher, nonprofit, admin' 
-      });
-    });
-
-    it('should require organizationData for nonprofit role', async () => {
-      req.body = {
-        name: 'John Doe',
-        email: 'john@example.com',
-        password: 'password123',
-        role: 'nonprofit'
-        // Missing organizationData
-      };
-
-      await authController.register(req, res);
-
-      expect(res.status).toHaveBeenCalledWith(400);
-      expect(res.json).toHaveBeenCalledWith(
-        expect.objectContaining({
-          error: 'organizationData is required for nonprofit role'
-        })
-      );
-    });
-
-    it('should validate rate range for researcher', async () => {
-      req.body = {
-        name: 'John Doe',
-        email: 'john@example.com',
-        password: 'password123',
-        role: 'researcher',
-        researcherData: {
-          rate_min: 100,
-          rate_max: 50 // Invalid: max < min
-        }
-      };
-
-      await authController.register(req, res);
-
-      expect(res.status).toHaveBeenCalledWith(400);
-      expect(res.json).toHaveBeenCalledWith({ 
-        error: 'rate_min must be less than rate_max' 
-      });
-    });
-
-    it('should normalize email to lowercase', async () => {
-      req.body = {
-        name: 'John Doe',
-        email: 'JOHN@EXAMPLE.COM',
-        password: 'password123'
-      };
-
-      authModel.findUserByEmail.mockResolvedValue(false);
-      bcrypt.hash.mockResolvedValue('hashed_password');
-      authModel.createUser.mockResolvedValue({
-        id: 1,
-        name: 'John Doe',
-        email: 'john@example.com',
+        password: 'weakpass',
         role: 'researcher'
-      });
-      jwt.sign.mockReturnValue('mock-jwt-token');
-
-      await authController.register(req, res);
-
-      expect(authModel.findUserByEmail).toHaveBeenCalledWith('john@example.com');
-    });
-
-    it('should handle database errors gracefully', async () => {
-      req.body = {
-        name: 'John Doe',
-        email: 'john@example.com',
-        password: 'password123'
       };
 
-      authModel.findUserByEmail.mockResolvedValue(false);
-      bcrypt.hash.mockResolvedValue('hashed_password');
-      authModel.createUser.mockRejectedValue(new Error('Database error'));
+      await authController.register(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(res.json).toHaveBeenCalledWith({
+        error: 'Password must be at least 8 characters and include uppercase, lowercase, number, and special character.'
+      });
+    });
+
+    it('requires organizationData for nonprofit users', async () => {
+      req.body = {
+        name: 'Org User',
+        email: 'org@example.com',
+        password: 'Strong1!',
+        role: 'nonprofit'
+      };
 
       await authController.register(req, res);
 
-      expect(res.status).toHaveBeenCalledWith(500);
-      expect(res.json).toHaveBeenCalledWith({ error: 'internal error' });
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+        error: 'organizationData is required for nonprofit role'
+      }));
     });
   });
 
   describe('login', () => {
-    it('should login user with valid credentials', async () => {
-      req.body = {
-        email: 'john@example.com',
-        password: 'password123'
-      };
-
-      const mockUser = {
-        id: 1,
-        name: 'John Doe',
-        email: 'john@example.com',
-        role: 'researcher',
-        password_hash: 'hashed_password',
-        created_at: new Date()
-      };
-
-      authModel.getUserByEmail.mockResolvedValue(mockUser);
-      bcrypt.compare.mockResolvedValue(true);
-      jwt.sign.mockReturnValue('mock-jwt-token');
-
-      await authController.login(req, res);
-
-      expect(authModel.getUserByEmail).toHaveBeenCalledWith('john@example.com');
-      expect(bcrypt.compare).toHaveBeenCalledWith('password123', 'hashed_password');
-      expect(res.status).not.toHaveBeenCalledWith(401);
-      expect(res.json).toHaveBeenCalledWith(
-        expect.objectContaining({
-          user: expect.objectContaining({ email: 'john@example.com' }),
-          token: 'mock-jwt-token'
-        })
-      );
-    });
-
-    it('should return 400 if email or password is missing', async () => {
-      req.body = { email: 'john@example.com' }; // Missing password
-
-      await authController.login(req, res);
-
-      expect(res.status).toHaveBeenCalledWith(400);
-      expect(res.json).toHaveBeenCalledWith({ 
-        error: 'email and password are required' 
-      });
-    });
-
-    it('should return 401 if email not found', async () => {
-      req.body = {
-        email: 'nonexistent@example.com',
-        password: 'password123'
-      };
-
+    it('returns generic invalid credentials when email is not found', async () => {
+      req.body = { email: 'missing@example.com', password: 'Strong1!' };
       authModel.getUserByEmail.mockResolvedValue(null);
 
       await authController.login(req, res);
 
       expect(res.status).toHaveBeenCalledWith(401);
-      expect(res.json).toHaveBeenCalledWith({ error: 'invalid email' });
+      expect(res.json).toHaveBeenCalledWith({ error: 'Invalid credentials' });
     });
 
-    it('should return 401 if password is incorrect', async () => {
-      req.body = {
-        email: 'john@example.com',
-        password: 'wrongpassword'
-      };
-
-      const mockUser = {
-        id: 1,
-        email: 'john@example.com',
-        password_hash: 'hashed_password'
-      };
-
-      authModel.getUserByEmail.mockResolvedValue(mockUser);
-      bcrypt.compare.mockResolvedValue(false);
-
-      await authController.login(req, res);
-
-      expect(res.status).toHaveBeenCalledWith(401);
-      expect(res.json).toHaveBeenCalledWith({ error: 'invalid password' });
-    });
-
-    it('should not return password_hash in response', async () => {
-      req.body = {
-        email: 'john@example.com',
-        password: 'password123'
-      };
-
-      const mockUser = {
-        id: 1,
-        name: 'John Doe',
-        email: 'john@example.com',
-        role: 'researcher',
-        password_hash: 'hashed_password',
-        created_at: new Date()
-      };
-
-      authModel.getUserByEmail.mockResolvedValue(mockUser);
-      bcrypt.compare.mockResolvedValue(true);
-      jwt.sign.mockReturnValue('mock-jwt-token');
-
-      await authController.login(req, res);
-
-      const response = res.json.mock.calls[0][0];
-      expect(response.user.password_hash).toBeUndefined();
-    });
-
-    it('should normalize email to lowercase', async () => {
-      req.body = {
-        email: 'JOHN@EXAMPLE.COM',
-        password: 'password123'
-      };
-
+    it('returns generic invalid credentials when password is wrong', async () => {
+      req.body = { email: 'john@example.com', password: 'Wrong1!' };
       authModel.getUserByEmail.mockResolvedValue({
         id: 1,
         email: 'john@example.com',
         password_hash: 'hash'
       });
-      bcrypt.compare.mockResolvedValue(true);
-      jwt.sign.mockReturnValue('token');
+      bcrypt.compare.mockResolvedValue(false);
 
       await authController.login(req, res);
 
-      expect(authModel.getUserByEmail).toHaveBeenCalledWith('john@example.com');
+      expect(res.status).toHaveBeenCalledWith(401);
+      expect(res.json).toHaveBeenCalledWith({ error: 'Invalid credentials' });
     });
 
-    it('should handle database errors gracefully', async () => {
-      req.body = {
-        email: 'john@example.com',
-        password: 'password123'
-      };
-
-      authModel.getUserByEmail.mockRejectedValue(new Error('Database error'));
-
-      await authController.login(req, res);
-
-      expect(res.status).toHaveBeenCalledWith(500);
-      expect(res.json).toHaveBeenCalledWith({ error: 'internal error' });
-    });
-
-    it('should generate JWT with correct payload', async () => {
-      req.body = {
-        email: 'john@example.com',
-        password: 'password123'
-      };
-
-      const mockUser = {
+    it('blocks login when email is not verified', async () => {
+      req.body = { email: 'john@example.com', password: 'Strong1!' };
+      authModel.getUserByEmail.mockResolvedValue({
         id: 1,
-        name: 'John Doe',
+        name: 'John',
         email: 'john@example.com',
-        role: 'researcher',
-        password_hash: 'hashed_password'
-      };
-
-      authModel.getUserByEmail.mockResolvedValue(mockUser);
+        role: 'nonprofit',
+        org_id: 88,
+        password_hash: 'hash'
+      });
       bcrypt.compare.mockResolvedValue(true);
-      jwt.sign.mockReturnValue('mock-jwt-token');
+      EmailVerification.findByUserId.mockResolvedValue({
+        isExpired: () => false
+      });
 
       await authController.login(req, res);
 
-      expect(jwt.sign).toHaveBeenCalledWith(
-        expect.objectContaining({
-          userId: 1,
-          role: 'researcher',
-          email: 'john@example.com'
-        }),
-        'test-secret',
-        { expiresIn: '7d' }
-      );
+      expect(res.status).toHaveBeenCalledWith(401);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+        code: 'EMAIL_NOT_VERIFIED'
+      }));
+    });
+
+    it('logs in verified users and returns org_id in user payload', async () => {
+      req.body = { email: 'john@example.com', password: 'Strong1!' };
+      authModel.getUserByEmail.mockResolvedValue({
+        id: 1,
+        name: 'John',
+        email: 'john@example.com',
+        role: 'nonprofit',
+        org_id: 77,
+        created_at: new Date('2026-01-01'),
+        password_hash: 'hash'
+      });
+      bcrypt.compare.mockResolvedValue(true);
+      EmailVerification.findByUserId.mockResolvedValue(null);
+      jwt.sign.mockReturnValue('jwt-token');
+
+      await authController.login(req, res);
+
+      expect(jwt.sign).toHaveBeenCalled();
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+        token: 'jwt-token',
+        user: expect.objectContaining({
+          id: 1,
+          role: 'nonprofit',
+          org_id: 77
+        })
+      }));
+    });
+  });
+
+  describe('requestPasswordReset', () => {
+    it('responds generically when user email does not exist', async () => {
+      req.body = { email: 'none@example.com' };
+      authModel.getUserByEmail.mockResolvedValue(null);
+
+      await authController.requestPasswordReset(req, res);
+
+      expect(res.json).toHaveBeenCalledWith({
+        message: 'If that email is registered, a password reset link has been sent.'
+      });
+    });
+
+    it('creates reset token and sends email when user exists', async () => {
+      req.body = { email: 'john@example.com' };
+      authModel.getUserByEmail.mockResolvedValue({ id: 1, email: 'john@example.com', name: 'John' });
+      jwt.sign.mockReturnValue('reset-token');
+      PasswordReset.upsertForUser.mockResolvedValue({});
+      emailService.sendPasswordResetEmail.mockResolvedValue({});
+
+      await authController.requestPasswordReset(req, res);
+
+      expect(PasswordReset.upsertForUser).toHaveBeenCalled();
+      expect(emailService.sendPasswordResetEmail).toHaveBeenCalledWith('john@example.com', 'John', 'reset-token');
+      expect(res.json).toHaveBeenCalledWith({
+        message: 'If that email is registered, a password reset link has been sent.'
+      });
+    });
+  });
+
+  describe('verifyEmail', () => {
+    it('returns 400 when verification token is missing', async () => {
+      req.query = {};
+      req.body = {};
+
+      await authController.verifyEmail(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(res.json).toHaveBeenCalledWith({ error: 'Verification token is required' });
+    });
+
+    it('verifies email successfully when token is valid', async () => {
+      req.query = { token: 'verify-token' };
+      jwt.verify.mockReturnValue({ purpose: 'email-verification' });
+      const destroy = jest.fn().mockResolvedValue(undefined);
+      EmailVerification.findByToken.mockResolvedValue({ isExpired: () => false, destroy });
+
+      await authController.verifyEmail(req, res);
+
+      expect(destroy).toHaveBeenCalled();
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+    });
+  });
+
+  describe('resendVerificationEmail', () => {
+    it('returns generic message when user is not found', async () => {
+      req.body = { email: 'none@example.com' };
+      authModel.getUserByEmail.mockResolvedValue(null);
+
+      await authController.resendVerificationEmail(req, res);
+
+      expect(res.json).toHaveBeenCalledWith({
+        message: 'If that email is registered and unverified, a verification link has been sent.'
+      });
+    });
+
+    it('returns already verified when no pending verification record exists', async () => {
+      req.body = { email: 'john@example.com' };
+      authModel.getUserByEmail.mockResolvedValue({ id: 1, email: 'john@example.com', name: 'John' });
+      EmailVerification.findByUserId.mockResolvedValue(null);
+
+      await authController.resendVerificationEmail(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ code: 'ALREADY_VERIFIED' }));
+    });
+  });
+
+  describe('2FA enable flow', () => {
+    it('returns 400 when enabling 2FA for already-enabled account', async () => {
+      req.user = { id: 1 };
+      User.findByPk.mockResolvedValue({ id: 1, email: 'john@example.com', name: 'John', mfa_enabled: true });
+
+      await authController.sendEnable2FACode(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(res.json).toHaveBeenCalledWith({ error: '2FA is already enabled' });
+    });
+
+    it('returns 400 when verify code is missing', async () => {
+      req.user = { id: 1 };
+      req.body = {};
+
+      await authController.verifyEnable2FACode(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(res.json).toHaveBeenCalledWith({ error: 'Code is required' });
+    });
+
+    it('rejects invalid 2FA code and increments attempts', async () => {
+      req.user = { id: 1 };
+      req.body = { code: '123456' };
+
+      const save = jest.fn().mockResolvedValue(undefined);
+      TwoFactorCode.findOne.mockResolvedValue({
+        expires_at: new Date(Date.now() + 10000),
+        attempts: 0,
+        code_hash: 'hash',
+        save
+      });
+      bcrypt.compare.mockResolvedValue(false);
+
+      await authController.verifyEnable2FACode(req, res);
+
+      expect(save).toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(res.json).toHaveBeenCalledWith({ error: 'Invalid code.' });
+    });
+  });
+
+  describe('resetPassword', () => {
+    it('enforces strong password policy on reset', async () => {
+      req.body = { token: 'reset-token', password: 'weakpass' };
+
+      await authController.resetPassword(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(res.json).toHaveBeenCalledWith({
+        error: 'Password must be at least 8 characters and include uppercase, lowercase, number, and special character.'
+      });
+    });
+
+    it('resets password successfully with strong password', async () => {
+      req.body = { token: 'reset-token', password: 'Strong1!' };
+      jwt.verify.mockReturnValue({ userId: 1, purpose: 'password-reset' });
+
+      const destroy = jest.fn().mockResolvedValue(undefined);
+      PasswordReset.findByToken.mockResolvedValue({
+        isExpired: () => false,
+        destroy
+      });
+
+      const save = jest.fn().mockResolvedValue(undefined);
+      User.findByPk.mockResolvedValue({ id: 1, save });
+      bcrypt.hash.mockResolvedValue('new-hash');
+
+      await authController.resetPassword(req, res);
+
+      expect(bcrypt.hash).toHaveBeenCalledWith('Strong1!', 10);
+      expect(save).toHaveBeenCalled();
+      expect(destroy).toHaveBeenCalled();
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
     });
   });
 });

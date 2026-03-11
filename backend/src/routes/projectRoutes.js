@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const projectController = require('../controllers/projectController');
-const { authenticate, requireNonprofit } = require('../middleware/auth');
+const { authenticate, requireNonprofit, requireResearcher } = require('../middleware/auth');
 
 // Mount milestone routes under /projects/:projectId/milestones
 const milestoneRoutes = require('./milestoneRoutes');
@@ -14,8 +14,19 @@ router.use('/:projectId/milestones', milestoneRoutes);
 // Browse and search public projects
 router.get('/browse', projectController.browseProjects);
 
-// Get public project details by ID
-router.get('/browse/:id', projectController.getPublicProject);
+// Featured projects for home page
+router.get('/browse/featured', projectController.getFeaturedProjects);
+
+// Public platform metrics for home page
+router.get('/browse/metrics', projectController.getPublicPlatformMetrics);
+
+// Get public project details by ID (numeric only)
+router.get('/browse/:id(\\d+)', projectController.getPublicProject);
+
+// Saved project routes (researchers only)
+router.get('/saved', authenticate, requireResearcher, projectController.getSavedProjects);
+router.post('/:id/save', authenticate, requireResearcher, projectController.saveProject);
+router.delete('/:id/save', authenticate, requireResearcher, projectController.unsaveProject);
 
 /**
  * All project management routes require authentication and nonprofit role
