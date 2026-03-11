@@ -295,7 +295,11 @@ const getSavedProjects = async (req, res) => {
  */
 const getPublicProject = async (req, res) => {
   try {
-    const projectId = req.params.id;
+    const projectId = parseInt(req.params.id, 10);
+
+    if (!Number.isInteger(projectId)) {
+      return res.status(400).json({ error: 'Invalid project id' });
+    }
 
     const project = await Project.findOne({
       where: {

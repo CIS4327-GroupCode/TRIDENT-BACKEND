@@ -20,8 +20,8 @@ router.get('/browse/featured', projectController.getFeaturedProjects);
 // Public platform metrics for home page
 router.get('/browse/metrics', projectController.getPublicPlatformMetrics);
 
-// Get public project details by ID
-router.get('/browse/:id', projectController.getPublicProject);
+// Get public project details by ID (numeric only)
+router.get('/browse/:id(\\d+)', projectController.getPublicProject);
 
 // Saved project routes (researchers only)
 router.get('/saved', authenticate, requireResearcher, projectController.getSavedProjects);
