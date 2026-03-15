@@ -39,6 +39,11 @@ AuditLog.init(
       allowNull: true,
       field: 'entity_id'
     },
+    metadata: {
+      type: DataTypes.JSONB,
+      allowNull: true,
+      defaultValue: {}
+    },
     timestamp: {
       type: DataTypes.DATE,
       allowNull: true,

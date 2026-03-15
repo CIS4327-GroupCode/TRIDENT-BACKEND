@@ -17,6 +17,8 @@ const Project = require('../database/models/Project');
 const ResearcherProfile = require('../database/models/ResearcherProfile');
 const Organization = require('../database/models/Organization');
 const User = require('../database/models/User');
+const Match = require('../database/models/Match');
+const Application = require('../database/models/Application');
 
 /**
  * Parse comma-separated string into array of lowercase trimmed values
@@ -29,6 +31,22 @@ function parseCommaSeparated(str) {
     .split(',')
     .map(item => item.trim().toLowerCase())
     .filter(item => item.length > 0);
+}
+
+function parseComplianceCertifications(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => String(item || '').trim().toLowerCase())
+      .filter((item) => item.length > 0);
+  }
+  if (typeof value === 'string') {
+    return value
+      .split(',')
+      .map((item) => item.trim().toLowerCase())
+      .filter((item) => item.length > 0);
+  }
+  return [];
 }
 
 /**
@@ -214,16 +232,30 @@ function calculateDomainScore(orgFocusAreas, researcherDomains) {
  * @returns {Object} {totalScore, breakdown, strengths, concerns}
  */
 function calculateMatchScore(project, researcher) {
+  const complianceCertifications = parseComplianceCertifications(
+    researcher.compliance_certifications
+  );
+  const hasComplianceCertifications = complianceCertifications.length > 0;
+  const dataSensitivity = String(project.data_sensitivity || '').toLowerCase();
+
   const breakdown = {
     expertise: calculateExpertiseScore(project.problem || project.outcomes || '', researcher.expertise),
     methods: calculateMethodsScore(project.methods_required, researcher.methods),
     budget: calculateBudgetScore(project, researcher),
     availability: calculateAvailabilityScore(project, researcher),
     experience: calculateExperienceScore(researcher.projects_completed),
-    domain: calculateDomainScore(project.organization?.focus_areas, researcher.domains)
+    domain: calculateDomainScore(project.organization?.focus_areas, researcher.domains),
+    has_certifications: hasComplianceCertifications
   };
   
-  const totalScore = Object.values(breakdown).reduce((sum, val) => sum + val, 0);
+  const totalScore = [
+    breakdown.expertise,
+    breakdown.methods,
+    breakdown.budget,
+    breakdown.availability,
+    breakdown.experience,
+    breakdown.domain
+  ].reduce((sum, val) => sum + val, 0);
   
   // Generate strengths and concerns
   const strengths = [];
@@ -235,12 +267,18 @@ function calculateMatchScore(project, researcher) {
   if (breakdown.budget >= 12) strengths.push('Rate fits within budget');
   if (breakdown.availability === 10) strengths.push('Available and has capacity');
   if (breakdown.experience >= 8) strengths.push(`Highly experienced (${researcher.projects_completed} projects)`);
+  if ((dataSensitivity === 'medium' || dataSensitivity === 'high') && hasComplianceCertifications) {
+    strengths.push('Has compliance certifications for sensitive projects');
+  }
   
   if (breakdown.expertise < 15) concerns.push('Limited expertise overlap');
   if (breakdown.methods < 15) concerns.push('Missing some required methods');
   if (breakdown.budget < 8) concerns.push('Rate may not fit budget');
   if (breakdown.availability < 5) concerns.push('May not be available or at capacity');
   if (breakdown.domain < 5) concerns.push('Different research domain focus');
+  if (dataSensitivity === 'high' && !hasComplianceCertifications) {
+    concerns.push('No compliance certifications listed for high-sensitivity work');
+  }
   
   return {
     totalScore: Math.round(totalScore * 10) / 10,
@@ -258,9 +296,11 @@ function calculateMatchScore(project, researcher) {
  */
 async function findMatchesForProject(projectId, options) {
   const {
-    limit ,
-    offset ,
-    minScore
+    limit,
+    offset,
+    minScore,
+    requireCompliance = false,
+    complianceFilter = ''
   } = options;
   
   // Fetch project
@@ -301,14 +341,46 @@ async function findMatchesForProject(projectId, options) {
   users.forEach(user => {
     userMap[user.id] = user;
   });
+
+  // Build dismissed lookup and applied lookup
+  const dismissedRows = await Match.findAll({
+    where: {
+      brief_id: project.project_id,
+      dismissed: true
+    },
+    attributes: ['researcher_id']
+  });
+  const dismissedResearcherIds = new Set(dismissedRows.map(row => Number(row.researcher_id)));
+
+  let appliedResearcherIds = new Set();
+  try {
+    const applicationRows = await Application.findAll({
+      where: {
+        project_id: project.project_id,
+        type: 'project_application',
+        status: {
+          [Op.in]: ['pending', 'accepted']
+        }
+      },
+      attributes: ['researcher_id']
+    });
+    appliedResearcherIds = new Set(applicationRows.map(row => Number(row.researcher_id)));
+  } catch (error) {
+    // Keep matching available even if project_id is not migrated in a local database.
+    appliedResearcherIds = new Set();
+  }
   
+  const requiredCertifications = parseComplianceCertifications(complianceFilter);
+
   // Calculate scores for researchers with active users
   const matches = researchers
-    .filter(researcher => userMap[researcher.user_id])
+    .filter(researcher => userMap[researcher.user_id] && !dismissedResearcherIds.has(Number(researcher.user_id)))
     .map(researcher => {
       const user = userMap[researcher.user_id];
       const projectData = project.toJSON();
       projectData.organization = organization ? organization.toJSON() : null;
+      const complianceCertifications = parseComplianceCertifications(researcher.compliance_certifications);
+      const hasComplianceCertifications = complianceCertifications.length > 0;
       
       const scoreData = calculateMatchScore(projectData, researcher.toJSON());
       
@@ -325,6 +397,7 @@ async function findMatchesForProject(projectId, options) {
           tools: parseCommaSeparated(researcher.tools),
           research_interests: researcher.research_interests,
           compliance_certifications: researcher.compliance_certifications,
+          compliance_certification_list: complianceCertifications,
           rate_min: researcher.hourly_rate_min || researcher.rate_min,
           rate_max: researcher.hourly_rate_max || researcher.rate_max,
           hourly_rate_min: researcher.hourly_rate_min,
@@ -339,7 +412,8 @@ async function findMatchesForProject(projectId, options) {
         scoreBreakdown: scoreData.breakdown,
         strengths: scoreData.strengths,
         concerns: scoreData.concerns,
-        hasApplied: false, // TODO: Check agreements table
+        hasApplied: appliedResearcherIds.has(Number(researcher.user_id)),
+        hasComplianceCertifications,
         isBookmarked: false // TODO: Implement bookmarks
       };
     });
@@ -347,6 +421,17 @@ async function findMatchesForProject(projectId, options) {
   // Filter by minimum score and sort
   const filteredMatches = matches
     .filter(match => match.matchScore >= minScore)
+    .filter(match => {
+      if (!requireCompliance) return true;
+      return match.hasComplianceCertifications;
+    })
+    .filter(match => {
+      if (requiredCertifications.length === 0) return true;
+      const available = parseComplianceCertifications(match.researcher.compliance_certification_list);
+      return requiredCertifications.every((required) =>
+        available.some((certification) => certification.includes(required))
+      );
+    })
     .sort((a, b) => b.matchScore - a.matchScore);
   
   // Paginate
@@ -405,9 +490,41 @@ async function findMatchesForResearcher(researcherId, options = {}) {
   organizations.forEach(org => {
     orgMap[org.id] = org;
   });
+
+  const dismissedRows = await Match.findAll({
+    where: {
+      researcher_id: researcher.user_id,
+      dismissed: true
+    },
+    attributes: ['brief_id']
+  });
+  const dismissedProjectIds = new Set(dismissedRows.map(row => Number(row.brief_id)));
+
+  let appliedProjectIds = new Set();
+  try {
+    const applicationRows = await Application.findAll({
+      where: {
+        researcher_id: researcher.user_id,
+        type: 'project_application',
+        status: {
+          [Op.in]: ['pending', 'accepted']
+        }
+      },
+      attributes: ['project_id']
+    });
+    appliedProjectIds = new Set(
+      applicationRows
+        .map(row => Number(row.project_id))
+        .filter(Boolean)
+    );
+  } catch (error) {
+    appliedProjectIds = new Set();
+  }
   
   // Calculate scores for all projects
-  const matches = projects.map(project => {
+  const matches = projects
+  .filter(project => !dismissedProjectIds.has(Number(project.project_id)))
+  .map(project => {
     const projectData = project.toJSON();
     projectData.organization = orgMap[project.org_id] ? orgMap[project.org_id].toJSON() : null;
     
@@ -432,7 +549,7 @@ async function findMatchesForResearcher(researcherId, options = {}) {
       scoreBreakdown: scoreData.breakdown,
       strengths: scoreData.strengths,
       concerns: scoreData.concerns,
-      hasApplied: false, // TODO: Check agreements table
+      hasApplied: appliedProjectIds.has(Number(project.project_id)),
       isBookmarked: false // TODO: Implement bookmarks
     };
   });
@@ -459,6 +576,7 @@ async function findMatchesForResearcher(researcherId, options = {}) {
 module.exports = {
   // Utility functions
   parseCommaSeparated,
+  parseComplianceCertifications,
   calculateJaccardSimilarity,
   checkRangeOverlap,
   

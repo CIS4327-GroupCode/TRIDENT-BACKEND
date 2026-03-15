@@ -8,7 +8,7 @@
 const express = require('express');
 const router = express.Router();
 const matchController = require('../controllers/matchController');
-const { authenticate } = require('../middleware/auth');
+const { authenticate, requireResearcher, requireAdmin } = require('../middleware/auth');
 
 /**
  * All match routes require authentication
@@ -30,7 +30,7 @@ router.get('/project/:projectId', matchController.getProjectMatches);
  * Auth: Authenticated researcher
  * Query params: limit, offset, minScore
  */
-router.get('/researcher/me', matchController.getResearcherMatches);
+router.get('/researcher/me', requireResearcher, matchController.getResearcherMatches);
 
 /**
  * GET /api/matches/explain
@@ -48,10 +48,16 @@ router.get('/explain', matchController.explainMatch);
 router.post('/:matchId/dismiss', matchController.dismissMatch);
 
 /**
+ * POST /api/matches/project/:projectId/researcher/:researcherId/dismiss
+ * Dismiss a match by project/researcher pair.
+ */
+router.post('/project/:projectId/researcher/:researcherId/dismiss', matchController.dismissMatch);
+
+/**
  * POST /api/matches/recalculate
  * Batch recalculate all matches (future implementation - Phase 3)
  * Auth: Admin only
  */
-router.post('/recalculate', matchController.recalculateAllMatches);
+router.post('/recalculate', requireAdmin, matchController.recalculateAllMatches);
 
 module.exports = router;

@@ -1,5 +1,19 @@
 const { User, UserPreferences, Organization, ResearcherProfile } = require('../database/models');
 const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const { EmailVerification } = require('../database/models');
+const emailService = require('../services/emailService');
+const { PASSWORD_POLICY_MESSAGE, isStrongPassword } = require('../utils/passwordPolicy');
+const { logAudit, AUDIT_ACTIONS } = require('../utils/auditLogger');
+
+function trimStringFields(input = {}) {
+  const output = {};
+  Object.keys(input).forEach((key) => {
+    const value = input[key];
+    output[key] = typeof value === 'string' ? value.trim() : value;
+  });
+  return output;
+}
 
 /**
  * Get current user profile
@@ -49,10 +63,10 @@ const getUserProfile = async (req, res) => {
 const updateUserProfile = async (req, res) => {
   try {
     const userId = req.user.id;
-    const { name, email } = req.body;
+    const { name, email } = trimStringFields(req.body || {});
 
     // Validate input
-    if (!name && !email) {
+    if ((name === undefined || name === '') && (email === undefined || email === '')) {
       return res.status(400).json({ error: 'No update fields provided' });
     }
 
@@ -63,8 +77,11 @@ const updateUserProfile = async (req, res) => {
     }
 
     // Check if email is already taken by another user
-    if (email && email !== user.email) {
-      const existingUser = await User.findOne({ where: { email } });
+    const normalizedEmail = typeof email === 'string' ? email.toLowerCase() : email;
+    const emailChanged = normalizedEmail && normalizedEmail !== user.email;
+
+    if (emailChanged) {
+      const existingUser = await User.findOne({ where: { email: normalizedEmail } });
       if (existingUser) {
         return res.status(409).json({ error: 'Email already in use' });
       }
@@ -72,18 +89,51 @@ const updateUserProfile = async (req, res) => {
 
     // Update fields
     if (name) user.name = name;
-    if (email) user.email = email;
+    if (emailChanged) {
+      user.account_status = 'pending';
+    }
 
     await user.save();
+
+    if (emailChanged) {
+      const verificationToken = jwt.sign(
+        { userId: user.id, email: normalizedEmail, purpose: 'email-change-verification' },
+        process.env.JWT_SECRET,
+        { expiresIn: '24h' }
+      );
+
+      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+      await EmailVerification.upsertForUser(user.id, verificationToken, expiresAt);
+
+      try {
+        await emailService.sendVerificationEmail(normalizedEmail, user.name, verificationToken);
+      } catch (emailError) {
+        console.error('Failed to send email-change verification email:', emailError);
+      }
+    }
+
+    void logAudit({
+      actorId: userId,
+      action: emailChanged ? AUDIT_ACTIONS.EMAIL_CHANGE : AUDIT_ACTIONS.PROFILE_UPDATE,
+      entityType: 'USER',
+      entityId: userId,
+      metadata: {
+        updatedFields: Object.keys(trimStringFields(req.body || {})),
+        emailChanged,
+      },
+    });
 
     // Return updated user
     const updatedUser = await User.findByPk(userId, {
       attributes: ['id', 'name', 'email', 'role', 'created_at', 'updated_at']
     });
 
-    return res.status(200).json({ 
-      message: 'Profile updated successfully',
-      user: updatedUser 
+    return res.status(200).json({
+      message: emailChanged
+        ? 'Profile updated. Verification email sent to your new address.'
+        : 'Profile updated successfully',
+      emailVerificationSent: !!emailChanged,
+      user: updatedUser
     });
   } catch (error) {
     console.error('Update profile error:', error);
@@ -106,8 +156,8 @@ const changePassword = async (req, res) => {
     }
 
     // Password strength validation
-    if (newPassword.length < 8) {
-      return res.status(400).json({ error: 'New password must be at least 8 characters long' });
+    if (!isStrongPassword(newPassword)) {
+      return res.status(400).json({ error: PASSWORD_POLICY_MESSAGE });
     }
 
     const user = await User.findByPk(userId);
@@ -117,17 +167,39 @@ const changePassword = async (req, res) => {
     }
 
     // Verify current password
-    const isValidPassword = await bcrypt.compare(currentPassword, user.password);
+    const isValidPassword = await bcrypt.compare(currentPassword, user.password_hash);
     if (!isValidPassword) {
       return res.status(401).json({ error: 'Current password is incorrect' });
     }
 
     // Hash new password
     const hashedPassword = await bcrypt.hash(newPassword, 10);
-    user.password = hashedPassword;
+    user.password_hash = hashedPassword;
     await user.save();
 
-    return res.status(200).json({ message: 'Password changed successfully' });
+    try {
+      await emailService.sendNotificationEmail(user.email, user.name, {
+        type: 'security',
+        title: 'Password Changed Successfully',
+        message: 'Your account password was changed. If this was not you, reset your password immediately.',
+        link: '/settings',
+      });
+    } catch (emailError) {
+      console.error('Failed to send password change notification email:', emailError);
+    }
+
+    void logAudit({
+      actorId: userId,
+      action: AUDIT_ACTIONS.PASSWORD_CHANGE,
+      entityType: 'USER',
+      entityId: userId,
+      metadata: { requireReLogin: true },
+    });
+
+    return res.status(200).json({
+      message: 'Password changed successfully',
+      requireReLogin: true,
+    });
   } catch (error) {
     console.error('Change password error:', error);
     return res.status(500).json({ error: 'Internal server error' });
@@ -202,6 +274,14 @@ const updatePreferences = async (req, res) => {
       await preferences.update(updates);
     }
 
+    void logAudit({
+      actorId: userId,
+      action: AUDIT_ACTIONS.PREFERENCES_UPDATE,
+      entityType: 'USER_PREFERENCES',
+      entityId: userId,
+      metadata: { updatedFields: Object.keys(updates) },
+    });
+
     return res.status(200).json({ 
       message: 'Preferences updated successfully',
       preferences 
@@ -227,6 +307,14 @@ const deleteAccount = async (req, res) => {
     }
 
     // Sequelize paranoid mode handles soft delete automatically
+    void logAudit({
+      actorId: userId,
+      action: AUDIT_ACTIONS.ACCOUNT_DELETE,
+      entityType: 'USER',
+      entityId: userId,
+      metadata: { mode: 'soft' },
+    });
+
     await user.destroy();
 
     return res.status(200).json({ 

@@ -1,6 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const adminController = require('../controllers/adminController');
+const reviewController = require('../controllers/reviewController');
+const agreementController = require('../controllers/agreementController');
 const { authenticate, requireAdmin } = require('../middleware/auth');
 
 // All routes require authentication and admin role
@@ -38,5 +40,19 @@ router.delete('/milestones/:id', adminController.deleteMilestone);
 // Organization Management
 router.get('/organizations', adminController.getAllOrganizations);
 router.delete('/organizations/:id', adminController.deleteOrganization);
+
+// Attachment Governance (UC13)
+router.get('/attachments', adminController.getAllAttachments);
+router.get('/attachments/stats', adminController.getAttachmentStats);
+router.delete('/attachments/:id', adminController.forceDeleteAttachment);
+
+// Review Moderation (UC5)
+router.get('/reviews', reviewController.getAdminReviews);
+router.get('/reviews/stats', reviewController.getAdminReviewStats);
+router.put('/reviews/:reviewId/moderate', reviewController.moderateReview);
+
+// Agreement Governance (UC11)
+router.get('/agreements', agreementController.adminListAgreements);
+router.get('/agreements/stats', agreementController.adminAgreementStats);
 
 module.exports = router;

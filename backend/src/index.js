@@ -37,7 +37,7 @@ app.use(cors({
       callback(null, true);
     } else {
       console.warn('CORS blocked origin:', origin);
-      callback(null, true); // Allow in production to debug, change to callback(new Error('Not allowed by CORS')) later
+      callback(new Error('Not allowed by CORS'));
     }
   },
   credentials: true,
@@ -81,6 +81,7 @@ const messageRoutes = require('./routes/messagesRoutes');
 const notificationRoutes = require('./routes/notificationRoutes');
 const applicationRoutes = require('./routes/applicationRoutes');
 const matchRoutes = require('./routes/matchRoutes');
+const agreementRoutes = require('./routes/agreementRoutes');
 
 //home route just to check if server is running
 app.get('/', (req, res) => {
@@ -98,6 +99,7 @@ app.use('/api/messages', messageRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/applications', applicationRoutes);
 app.use('/api/matches', matchRoutes);
+app.use('/api/agreements', agreementRoutes);
 
 // 404 handler for undefined routes
 app.use((req, res) => {
@@ -154,7 +156,13 @@ if (process.env.VERCEL !== '1') {
       // Schedule notification cleanup task
       try {
         const notificationCleanup = require('./tasks/notificationCleanup');
+        const milestoneDeadlineChecker = require('./tasks/milestoneDeadlineChecker');
+        const matchGenerationJob = require('./tasks/matchGenerationJob');
+        const attachmentRetentionCleanup = require('./tasks/attachmentRetentionCleanup');
         notificationCleanup.scheduleCleanup();
+        milestoneDeadlineChecker.scheduleDeadlineChecks();
+        matchGenerationJob.scheduleMatchGeneration();
+        attachmentRetentionCleanup.scheduleAttachmentRetentionCleanup();
       } catch (cleanupError) {
         console.warn('⚠ Failed to schedule notification cleanup:', cleanupError.message);
         // Don't fail server startup if scheduling fails

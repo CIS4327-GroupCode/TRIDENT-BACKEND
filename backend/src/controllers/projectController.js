@@ -4,9 +4,70 @@ const {
   ProjectReview,
   User,
   SavedProject,
+  Rating,
 } = require('../database/models');
 const { Op } = require('sequelize');
 const notificationService = require('../services/notificationService');
+
+const buildRatingSummary = (ratings = []) => {
+  if (!ratings.length) {
+    return {
+      count: 0,
+      averages: {
+        quality: 0,
+        communication: 0,
+        timeliness: 0,
+        overall: 0,
+      },
+    };
+  }
+
+  const sums = { quality: 0, communication: 0, timeliness: 0, overall: 0 };
+  let scoredCount = 0;
+
+  for (const rating of ratings) {
+    const scores = rating?.scores;
+    if (!scores || typeof scores !== 'object') {
+      continue;
+    }
+    if (
+      !Number.isFinite(scores.quality)
+      || !Number.isFinite(scores.communication)
+      || !Number.isFinite(scores.timeliness)
+      || !Number.isFinite(scores.overall)
+    ) {
+      continue;
+    }
+
+    scoredCount += 1;
+    sums.quality += Number(scores.quality);
+    sums.communication += Number(scores.communication);
+    sums.timeliness += Number(scores.timeliness);
+    sums.overall += Number(scores.overall);
+  }
+
+  if (!scoredCount) {
+    return {
+      count: ratings.length,
+      averages: {
+        quality: 0,
+        communication: 0,
+        timeliness: 0,
+        overall: 0,
+      },
+    };
+  }
+
+  return {
+    count: ratings.length,
+    averages: {
+      quality: Number((sums.quality / scoredCount).toFixed(2)),
+      communication: Number((sums.communication / scoredCount).toFixed(2)),
+      timeliness: Number((sums.timeliness / scoredCount).toFixed(2)),
+      overall: Number((sums.overall / scoredCount).toFixed(2)),
+    },
+  };
+};
 
 /**
  * Browse and search public projects (for researchers)
@@ -98,8 +159,49 @@ const browseProjects = async (req, res) => {
       offset: offset
     });
 
+    const projectIds = rows.map((project) => project.project_id);
+    let ratingSummaryByProject = new Map();
+
+    if (projectIds.length > 0) {
+      const ratingRows = await Rating.findAll({
+        where: {
+          project_id: { [Op.in]: projectIds },
+          status: 'active',
+        },
+        attributes: ['project_id', 'scores'],
+      });
+
+      const grouped = new Map();
+      for (const rating of ratingRows) {
+        const projectRatings = grouped.get(rating.project_id) || [];
+        projectRatings.push(rating);
+        grouped.set(rating.project_id, projectRatings);
+      }
+
+      ratingSummaryByProject = new Map(
+        Array.from(grouped.entries()).map(([id, ratings]) => [id, buildRatingSummary(ratings)])
+      );
+    }
+
+    const projects = rows.map((project) => {
+      const summary = ratingSummaryByProject.get(project.project_id) || {
+        count: 0,
+        averages: {
+          quality: 0,
+          communication: 0,
+          timeliness: 0,
+          overall: 0,
+        },
+      };
+
+      return {
+        ...project.toJSON(),
+        rating_summary: summary,
+      };
+    });
+
     return res.status(200).json({
-      projects: rows,
+      projects,
       pagination: {
         total: count,
         page: parseInt(page),
@@ -319,7 +421,41 @@ const getPublicProject = async (req, res) => {
       return res.status(404).json({ error: 'Project not found or not available' });
     }
 
-    return res.status(200).json({ project });
+    const [ratings, recentReviews] = await Promise.all([
+      Rating.findAll({
+        where: {
+          project_id: project.project_id,
+          status: 'active',
+        },
+        attributes: ['scores'],
+      }),
+      Rating.findAll({
+        where: {
+          project_id: project.project_id,
+          status: 'active',
+        },
+        include: [
+          {
+            model: User,
+            as: 'reviewer',
+            attributes: ['id', 'name', 'role'],
+          },
+        ],
+        attributes: ['id', 'comments', 'scores', 'created_at'],
+        order: [['created_at', 'DESC']],
+        limit: 5,
+      }),
+    ]);
+
+    const ratingSummary = buildRatingSummary(ratings);
+
+    const payload = {
+      ...project.toJSON(),
+      rating_summary: ratingSummary,
+      recent_reviews: recentReviews,
+    };
+
+    return res.status(200).json({ project: payload });
   } catch (error) {
     console.error('Get public project error:', error);
     return res.status(500).json({ error: 'Internal server error' });

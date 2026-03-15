@@ -16,24 +16,37 @@ async function clearData() {
   try {
     console.log('🧹 Clearing all database records...\n');
 
-    // Delete in reverse dependency order
-    await sequelize.query('DELETE FROM milestones');
-    console.log('✓ Deleted milestones');
-    
-    await sequelize.query('DELETE FROM user_preferences');
-    console.log('✓ Deleted user preferences');
-    
-    await sequelize.query('DELETE FROM project_ideas');
-    console.log('✓ Deleted projects');
-    
-    await sequelize.query('DELETE FROM researcher_profiles');
-    console.log('✓ Deleted researcher profiles');
-    
-    await sequelize.query('DELETE FROM organizations');
-    console.log('✓ Deleted organizations');
-    
-    await sequelize.query('DELETE FROM _user');
-    console.log('✓ Deleted users');
+    // Delete in reverse dependency order.
+    // Keep this list aligned with the model set under src/database/models.
+    const tables = [
+      'notifications',
+      'audit_logs',
+      'project_reviews',
+      'saved_projects',
+      'matches',
+      'ratings',
+      'messages',
+      'project_attachments',
+      'agreements',
+      'milestones',
+      'certifications',
+      'academic_history',
+      'user_preferences',
+      'project_ideas',
+      'researcher_profiles',
+      'organizations',
+      '_user'
+    ];
+
+    for (const table of tables) {
+      try {
+        await sequelize.query(`DELETE FROM ${table}`);
+        console.log(`✓ Deleted ${table}`);
+      } catch (tableError) {
+        // Keep going so one missing table doesn't block reset for the rest.
+        console.log(`⚠️  Skipped ${table}: ${tableError.message}`);
+      }
+    }
 
     console.log('\n✅ Database cleared successfully!\n');
     

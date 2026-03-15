@@ -24,6 +24,14 @@ const UserPreferences = require('./src/database/models/UserPreferences');
 const Application = require('./src/database/models/Application');
 const AcademicHistory = require('./src/database/models/AcademicHistory');
 const Certification = require('./src/database/models/Certification');
+const Match = require('./src/database/models/Match');
+const Message = require('./src/database/models/Message');
+const Rating = require('./src/database/models/Rating');
+const ProjectReview = require('./src/database/models/ProjectReview');
+const SavedProject = require('./src/database/models/SavedProject');
+const AuditLog = require('./src/database/models/AuditLog');
+const Attachment = require('./src/database/models/Attachment');
+const Notification = require('./src/database/models/Notification');
 
 async function seedDatabase() {
   try {
@@ -43,6 +51,11 @@ async function seedDatabase() {
 
     // Hash password once for all users
     const hashedPassword = await bcrypt.hash('Password123!', 10);
+    const shiftDays = (days) => {
+      const date = new Date();
+      date.setDate(date.getDate() + days);
+      return date;
+    };
 
     // ==================== STEP 1: Create Organizations ====================
     console.log('📋 Step 1: Creating Organizations...');
@@ -483,6 +496,81 @@ async function seedDatabase() {
       console.log(`✓ Created ${projects.length} projects\n`);
     }
 
+    // Ensure all project statuses are represented for in-browser testing.
+    const existingProjectStatuses = new Set(projects.map((project) => project.status));
+    const requiredStatusProjects = [
+      {
+        title: 'Pediatric Care Data Governance Review',
+        problem: 'Need governance model for handling pediatric cross-organization datasets',
+        outcomes: 'Deliver governance recommendations and approval checklist',
+        methods_required: 'Policy Analysis, Qualitative Research, Stakeholder Interviews',
+        timeline: '2 months',
+        budget_min: 6000,
+        budget_max: 9000,
+        data_sensitivity: 'High',
+        status: 'pending_review',
+        org_id: organizations[0].id
+      },
+      {
+        title: 'Community Air Sensor Recalibration Pilot',
+        problem: 'Prior calibration design lacked statistical confidence intervals and QA plan',
+        outcomes: 'Create a corrected pilot protocol with QA gates',
+        methods_required: 'Statistical Analysis, Experimental Design, Field Validation',
+        timeline: '3 months',
+        budget_min: 7000,
+        budget_max: 11000,
+        data_sensitivity: 'Low',
+        status: 'needs_revision',
+        org_id: organizations[1].id
+      },
+      {
+        title: 'Youth Engagement Survey Redesign',
+        problem: 'Original survey design produced low completion and biased responses',
+        outcomes: 'Produce revised instrument and response quality diagnostics',
+        methods_required: 'Survey Design, Psychometrics, Qualitative Research',
+        timeline: '2 months',
+        budget_min: 5000,
+        budget_max: 8000,
+        data_sensitivity: 'Medium',
+        status: 'rejected',
+        org_id: organizations[2].id
+      },
+      {
+        title: 'Senior Outreach Program Feasibility Study',
+        problem: 'Program paused due to budget reallocation and staffing constraints',
+        outcomes: 'Document feasibility and go/no-go criteria for next cycle',
+        methods_required: 'Feasibility Analysis, Budget Modeling, Program Evaluation',
+        timeline: '3 months',
+        budget_min: 4000,
+        budget_max: 7500,
+        data_sensitivity: 'Low',
+        status: 'cancelled',
+        org_id: organizations[3].id
+      },
+      {
+        title: 'Affordable Transit and Housing Correlation Study',
+        problem: 'Need validated analysis linking transit access and housing retention',
+        outcomes: 'Deliver approved study package and baseline dashboard',
+        methods_required: 'GIS Mapping, Longitudinal Analysis, Statistical Modeling',
+        timeline: '6 months',
+        budget_min: 14000,
+        budget_max: 20000,
+        data_sensitivity: 'Medium',
+        status: 'approved',
+        org_id: organizations[4].id
+      }
+    ];
+
+    const missingStatusProjects = requiredStatusProjects.filter(
+      (projectSeed) => !existingProjectStatuses.has(projectSeed.status)
+    );
+
+    if (missingStatusProjects.length > 0) {
+      const createdStatusProjects = await Project.bulkCreate(missingStatusProjects);
+      projects = [...projects, ...createdStatusProjects];
+      console.log(`✓ Added ${createdStatusProjects.length} status-coverage projects\n`);
+    }
+
     // ==================== STEP 8: Create Milestones ====================
     console.log('🎯 Step 8: Creating Milestones...');
     
@@ -679,6 +767,25 @@ async function seedDatabase() {
       }
     ]);
       console.log(`✓ Created ${milestones.length} milestones\n`);
+
+      // Dependency chain for UC4 manual testing (A -> B -> C)
+      const irb = milestones.find(
+        (milestone) =>
+          milestone.project_id === projects[0].project_id && milestone.name === 'IRB Approval Submission'
+      );
+      const recruit = milestones.find(
+        (milestone) =>
+          milestone.project_id === projects[0].project_id && milestone.name === 'Recruit Study Participants'
+      );
+      const baseline = milestones.find(
+        (milestone) =>
+          milestone.project_id === projects[0].project_id && milestone.name === 'Baseline Data Collection'
+      );
+
+      if (irb && recruit && baseline) {
+        await recruit.update({ depends_on: irb.id });
+        await baseline.update({ depends_on: recruit.id });
+      }
     }
 
     // ==================== STEP 9: Create Academic History ====================
@@ -916,6 +1023,7 @@ async function seedDatabase() {
       applications = await Application.bulkCreate([
         // Dr. Amanda Foster collaborations
         {
+          status: 'accepted',
           type: 'Data Use Agreement',
           value: 'Access to de-identified patient health records for asthma study',
           budget_info: '$15,000 - 6 month research contract',
@@ -925,9 +1033,11 @@ async function seedDatabase() {
             user: 'sarah.j@childrenshealth.org'
           }]),
           org_id: organizations[0].id,
+          project_id: projects[0].project_id,
           researcher_id: researchers[0].user_id
         },
         {
+          status: 'accepted',
           type: 'completed',
           value: 'Mental health screening tool validation for pediatric patients',
           budget_info: '$8,000 - Project completed December 2024',
@@ -936,11 +1046,13 @@ async function seedDatabase() {
             { date: new Date('2024-12-01'), action: 'Project completed' }
           ]),
           org_id: organizations[0].id,
+          project_id: projects[2].project_id,
           researcher_id: researchers[0].user_id
         },
         
         // Dr. James Liu collaborations
         {
+          status: 'pending',
           type: 'Research Collaboration Agreement',
           value: 'Environmental impact assessment of urban parks',
           budget_info: '$25,000 - 12 month study',
@@ -950,11 +1062,13 @@ async function seedDatabase() {
             user: 'michael.c@envaction.org'
           }]),
           org_id: organizations[1].id,
+          project_id: projects[3].project_id,
           researcher_id: researchers[1].user_id
         },
         
         // Dr. Maria Santos collaborations
         {
+          status: 'pending',
           type: 'Service Agreement',
           value: 'Digital literacy program evaluation and improvement recommendations',
           budget_info: '$12,000 - 5 month evaluation',
@@ -964,9 +1078,11 @@ async function seedDatabase() {
             user: 'emily.r@comedu.org'
           }]),
           org_id: organizations[2].id,
+          project_id: projects[5].project_id,
           researcher_id: researchers[2].user_id
         },
         {
+          status: 'accepted',
           type: 'completed',
           value: 'Online tutoring platform UX audit',
           budget_info: '$6,500 - Completed November 2024',
@@ -975,11 +1091,13 @@ async function seedDatabase() {
             { date: new Date('2024-11-01'), action: 'Final report delivered' }
           ]),
           org_id: organizations[2].id,
+          project_id: projects[6].project_id,
           researcher_id: researchers[2].user_id
         },
         
         // Dr. Robert Kim collaborations
         {
+          status: 'pending',
           type: 'Clinical Research Agreement',
           value: 'Fall prevention intervention trial design and implementation',
           budget_info: '$30,000 - 10 month clinical trial',
@@ -989,11 +1107,13 @@ async function seedDatabase() {
             user: 'david.t@seniorwellness.org'
           }]),
           org_id: organizations[3].id,
+          project_id: projects[7].project_id,
           researcher_id: researchers[3].user_id
         },
         
         // Dr. Lisa Anderson collaborations
         {
+          status: 'pending',
           type: 'Research Partnership',
           value: 'Housing stability outcomes longitudinal study',
           budget_info: '$35,000 - 18 month case study research',
@@ -1003,9 +1123,11 @@ async function seedDatabase() {
             user: 'jennifer.m@urbanhousing.org'
           }]),
           org_id: organizations[4].id,
+          project_id: projects[9].project_id,
           researcher_id: researchers[4].user_id
         },
         {
+          status: 'accepted',
           type: 'completed',
           value: 'Affordable housing needs assessment survey',
           budget_info: '$15,000 - Completed October 2024',
@@ -1014,11 +1136,13 @@ async function seedDatabase() {
             { date: new Date('2024-10-15'), action: 'Final report submitted' }
           ]),
           org_id: organizations[4].id,
+          project_id: projects[10].project_id,
           researcher_id: researchers[4].user_id
         },
         
         // Dr. Kevin Patel collaborations
         {
+          status: 'rejected',
           type: 'Data Analysis Agreement',
           value: 'Statistical modeling for community composting behavior study',
           budget_info: '$8,000 - 3 month data analysis',
@@ -1028,6 +1152,7 @@ async function seedDatabase() {
             user: 'michael.c@envaction.org'
           }]),
           org_id: organizations[1].id,
+          project_id: projects[4].project_id,
           researcher_id: researchers[5].user_id
         }
       ]);
@@ -1036,7 +1161,353 @@ async function seedDatabase() {
       console.log(`✓ Skipped - ${existingApplications} applications already exist\n`);
     }
 
-    // ==================== STEP 12: Summary ====================
+    // ==================== STEP 12: Create Matches ====================
+    console.log('🤝 Step 12: Creating Match Records...');
+
+    let matches;
+    const existingMatches = await Match.count();
+    if (existingMatches === 0 && researchers.length > 0 && projects.length > 0) {
+      const candidateProjects = projects.filter((project) => ['open', 'in_progress'].includes(project.status));
+      const matchPayload = [];
+
+      candidateProjects.forEach((project, projectIndex) => {
+        researchers.forEach((researcher, researcherIndex) => {
+          if ((projectIndex + researcherIndex) % 2 === 0) {
+            const expertiseScore = 70 + ((projectIndex + researcherIndex) % 25);
+            const methodsScore = 65 + ((projectIndex * 3 + researcherIndex) % 30);
+            const budgetScore = 55 + ((projectIndex * 7 + researcherIndex * 5) % 35);
+            const availabilityScore = 60 + ((projectIndex * 5 + researcherIndex * 2) % 35);
+            const experienceScore = 58 + ((projectIndex + researcherIndex * 4) % 38);
+            const domainScore = 62 + ((projectIndex * 2 + researcherIndex * 6) % 33);
+
+            const score = (
+              expertiseScore * 0.3 +
+              methodsScore * 0.25 +
+              budgetScore * 0.15 +
+              availabilityScore * 0.1 +
+              experienceScore * 0.1 +
+              domainScore * 0.1
+            ).toFixed(2);
+
+            matchPayload.push({
+              brief_id: project.project_id,
+              researcher_id: researcher.user_id,
+              score,
+              score_breakdown: {
+                expertise: expertiseScore,
+                methods: methodsScore,
+                budget: budgetScore,
+                availability: availabilityScore,
+                experience: experienceScore,
+                domain: domainScore
+              },
+              reason_codes: 'expertise_high,methods_match,budget_fit',
+              dismissed: matchPayload.length % 9 === 0,
+              calculated_at: shiftDays(-((projectIndex + researcherIndex) % 7))
+            });
+          }
+        });
+      });
+
+      matches = await Match.bulkCreate(matchPayload);
+      console.log(`✓ Created ${matches.length} match records\n`);
+    } else {
+      matches = await Match.findAll();
+      console.log(`✓ Found ${matches.length} existing match records\n`);
+    }
+
+    // ==================== STEP 13: Create Project Reviews ====================
+    console.log('🧾 Step 13: Creating Project Review Records...');
+
+    let projectReviews;
+    const existingProjectReviews = await ProjectReview.count();
+    if (existingProjectReviews === 0 && adminUser && projects.length > 0) {
+      const pendingProject = projects.find((project) => project.status === 'pending_review');
+      const rejectedProject = projects.find((project) => project.status === 'rejected');
+      const needsRevisionProject = projects.find((project) => project.status === 'needs_revision');
+      const approvedProject = projects.find((project) => project.status === 'approved') || projects.find((project) => project.status === 'open');
+
+      const reviewPayload = [];
+
+      if (pendingProject) {
+        reviewPayload.push({
+          project_id: pendingProject.project_id,
+          reviewer_id: adminUser.id,
+          action: 'submitted',
+          previous_status: 'draft',
+          new_status: 'pending_review',
+          feedback: 'Project submitted and queued for moderation.',
+          reviewed_at: shiftDays(-2)
+        });
+      }
+
+      if (approvedProject) {
+        reviewPayload.push({
+          project_id: approvedProject.project_id,
+          reviewer_id: adminUser.id,
+          action: 'approved',
+          previous_status: 'pending_review',
+          new_status: approvedProject.status === 'approved' ? 'approved' : 'open',
+          feedback: 'Scope and methods are clear. Approved for publication.',
+          reviewed_at: shiftDays(-1)
+        });
+      }
+
+      if (rejectedProject) {
+        reviewPayload.push({
+          project_id: rejectedProject.project_id,
+          reviewer_id: adminUser.id,
+          action: 'rejected',
+          previous_status: 'pending_review',
+          new_status: 'rejected',
+          feedback: 'Submission lacks measurable outcomes and compliance detail.',
+          reviewed_at: shiftDays(-3)
+        });
+      }
+
+      if (needsRevisionProject) {
+        reviewPayload.push({
+          project_id: needsRevisionProject.project_id,
+          reviewer_id: adminUser.id,
+          action: 'needs_revision',
+          previous_status: 'pending_review',
+          new_status: 'needs_revision',
+          feedback: 'Please clarify participant recruitment and risk mitigation.',
+          changes_requested: 'Add recruitment quotas, ethics escalation process, and quality control plan.',
+          reviewed_at: shiftDays(-4)
+        });
+      }
+
+      projectReviews = await ProjectReview.bulkCreate(reviewPayload);
+      console.log(`✓ Created ${projectReviews.length} project review records\n`);
+    } else {
+      projectReviews = await ProjectReview.findAll();
+      console.log(`✓ Found ${projectReviews.length} existing project review records\n`);
+    }
+
+    // ==================== STEP 14: Create Saved Projects ====================
+    console.log('🔖 Step 14: Creating Saved Project Records...');
+
+    let savedProjects;
+    const existingSavedProjects = await SavedProject.count();
+    if (existingSavedProjects === 0 && researcherUsers.length > 0 && projects.length > 0) {
+      const openProjects = projects.filter((project) => ['open', 'in_progress'].includes(project.status));
+      const savedPayload = [];
+
+      researcherUsers.forEach((researcherUser, researcherIndex) => {
+        for (let i = 0; i < Math.min(3, openProjects.length); i += 1) {
+          const project = openProjects[(researcherIndex + i) % openProjects.length];
+          savedPayload.push({
+            user_id: researcherUser.id,
+            project_id: project.project_id,
+            created_at: shiftDays(-(researcherIndex + i + 1)),
+            updated_at: shiftDays(-(researcherIndex + i + 1))
+          });
+        }
+      });
+
+      savedProjects = await SavedProject.bulkCreate(savedPayload);
+      console.log(`✓ Created ${savedProjects.length} saved project records\n`);
+    } else {
+      savedProjects = await SavedProject.findAll();
+      console.log(`✓ Found ${savedProjects.length} existing saved project records\n`);
+    }
+
+    // ==================== STEP 15: Create Messages ====================
+    console.log('💬 Step 15: Creating Message Records...');
+
+    let messages;
+    const existingMessages = await Message.count();
+    if (existingMessages === 0 && nonprofitUsers.length > 0 && researcherUsers.length > 0) {
+      const messagePayload = [
+        { sender_id: nonprofitUsers[0].id, recipient_id: researcherUsers[0].id, body: 'Hi Amanda, can we review the asthma baseline survey this week?', created_at: shiftDays(-10) },
+        { sender_id: researcherUsers[0].id, recipient_id: nonprofitUsers[0].id, body: 'Absolutely. I can share a revised draft by Thursday.', created_at: shiftDays(-9) },
+        { sender_id: nonprofitUsers[1].id, recipient_id: researcherUsers[1].id, body: 'Do you have availability for an on-site calibration workshop?', created_at: shiftDays(-8) },
+        { sender_id: researcherUsers[1].id, recipient_id: nonprofitUsers[1].id, body: 'Yes, next Tuesday works. Please send preferred time windows.', created_at: shiftDays(-7) },
+        { sender_id: nonprofitUsers[2].id, recipient_id: researcherUsers[2].id, body: 'We need your feedback on the tutoring engagement metrics.', created_at: shiftDays(-6) },
+        { sender_id: researcherUsers[2].id, recipient_id: nonprofitUsers[2].id, body: 'I will annotate the dashboard and return suggestions today.', created_at: shiftDays(-5) },
+        { sender_id: nonprofitUsers[3].id, recipient_id: researcherUsers[3].id, body: 'Can we lock participant onboarding criteria this sprint?', created_at: shiftDays(-4) },
+        { sender_id: researcherUsers[3].id, recipient_id: nonprofitUsers[3].id, body: 'Yes, sending a concise checklist and consent script now.', created_at: shiftDays(-3) },
+        { sender_id: nonprofitUsers[4].id, recipient_id: researcherUsers[4].id, body: 'Could we compare retention trends across both housing cohorts?', created_at: shiftDays(-2) },
+        { sender_id: researcherUsers[4].id, recipient_id: nonprofitUsers[4].id, body: 'Done. I uploaded a cohort comparison memo for your review.', created_at: shiftDays(-1) }
+      ];
+
+      messages = await Message.bulkCreate(messagePayload);
+      console.log(`✓ Created ${messages.length} message records\n`);
+    } else {
+      messages = await Message.findAll();
+      console.log(`✓ Found ${messages.length} existing message records\n`);
+    }
+
+    // ==================== STEP 16: Create Ratings ====================
+    console.log('⭐ Step 16: Creating Rating Records...');
+
+    let ratings;
+    const existingRatings = await Rating.count();
+    if (existingRatings === 0 && projects.length > 0) {
+      const completedOrActiveProjects = projects.filter((project) => ['completed', 'in_progress', 'open'].includes(project.status));
+      const ratingPayload = completedOrActiveProjects.slice(0, 4).map((project, index) => ({
+        from_party: index % 2 === 0 ? 'nonprofit' : 'researcher',
+        scores: {
+          quality: 4 + (index % 2),
+          communication: 5,
+          timeliness: 3 + (index % 3),
+          overall: 4
+        },
+        comments: [
+          'Excellent collaboration and clear deliverables.',
+          'Strong communication and thoughtful methodology.',
+          'Very responsive partner, with actionable outputs.',
+          'Great domain expertise and practical recommendations.'
+        ][index],
+        project_id: project.project_id,
+        rated_by_user_id: index % 2 === 0
+          ? nonprofitUsers[index % nonprofitUsers.length].id
+          : researcherUsers[index % researcherUsers.length].id,
+        rated_user_id: index % 2 === 0
+          ? researcherUsers[index % researcherUsers.length].id
+          : nonprofitUsers[index % nonprofitUsers.length].id,
+        status: 'active'
+      }));
+
+      ratings = await Rating.bulkCreate(ratingPayload);
+      console.log(`✓ Created ${ratings.length} rating records\n`);
+    } else {
+      ratings = await Rating.findAll();
+      console.log(`✓ Found ${ratings.length} existing rating records\n`);
+    }
+
+    // ==================== STEP 17: Create Notifications ====================
+    console.log('🔔 Step 17: Creating Notification Records...');
+
+    let notifications;
+    const existingNotifications = await Notification.count();
+    if (existingNotifications === 0 && allUsers.length > 0) {
+      const notificationTypes = [
+        'project_created',
+        'project_approved',
+        'project_rejected',
+        'milestone_completed',
+        'milestone_deadline_approaching',
+        'message_received',
+        'application_received',
+        'application_accepted',
+        'new_match_available',
+        'rating_received'
+      ];
+
+      const notificationPayload = [];
+      for (let i = 0; i < 20; i += 1) {
+        const user = allUsers[i % allUsers.length];
+        const type = notificationTypes[i % notificationTypes.length];
+
+        notificationPayload.push({
+          user_id: user.id,
+          type,
+          title: `Testing alert: ${type.replaceAll('_', ' ')}`,
+          message: `This seeded notification helps validate ${type} UI behavior in manual browser testing.`,
+          link: user.role === 'admin' ? '/admin' : `/dashboard/${user.role}`,
+          is_read: i % 5 === 0,
+          archived: false,
+          metadata: {
+            seeded: true,
+            scenario: type,
+            priority: i % 3 === 0 ? 'high' : 'normal'
+          },
+          created_at: shiftDays(-(i % 14)),
+          updated_at: shiftDays(-(i % 14))
+        });
+      }
+
+      notifications = await Notification.bulkCreate(notificationPayload);
+      console.log(`✓ Created ${notifications.length} notification records\n`);
+    } else {
+      notifications = await Notification.findAll();
+      console.log(`✓ Found ${notifications.length} existing notification records\n`);
+    }
+
+    // ==================== STEP 18: Create Audit Logs ====================
+    console.log('🕵️ Step 18: Creating Audit Log Records...');
+
+    let auditLogs;
+    const existingAuditLogs = await AuditLog.count();
+    if (existingAuditLogs === 0 && allUsers.length > 0) {
+      const auditPayload = [
+        { actor_id: adminUser.id, action: 'user_login', entity_type: 'user', entity_id: adminUser.id, metadata: { source: 'seed-script' }, timestamp: shiftDays(-9) },
+        { actor_id: nonprofitUsers[0].id, action: 'project_created', entity_type: 'project', entity_id: projects[0].project_id, metadata: { title: projects[0].title }, timestamp: shiftDays(-8) },
+        { actor_id: nonprofitUsers[1].id, action: 'project_status_changed', entity_type: 'project', entity_id: projects[4].project_id, metadata: { from: 'open', to: 'in_progress' }, timestamp: shiftDays(-7) },
+        { actor_id: researcherUsers[0].id, action: 'profile_updated', entity_type: 'user', entity_id: researcherUsers[0].id, metadata: { field: 'expertise' }, timestamp: shiftDays(-6) },
+        { actor_id: researcherUsers[2].id, action: 'settings_changed', entity_type: 'user', entity_id: researcherUsers[2].id, metadata: { section: 'notifications' }, timestamp: shiftDays(-5) },
+        { actor_id: nonprofitUsers[3].id, action: 'milestone_created', entity_type: 'milestone', entity_id: milestones[0].id, metadata: { name: milestones[0].name }, timestamp: shiftDays(-4) },
+        { actor_id: adminUser.id, action: 'project_reviewed', entity_type: 'project', entity_id: projects[0].project_id, metadata: { decision: 'approved' }, timestamp: shiftDays(-3) },
+        { actor_id: nonprofitUsers[4].id, action: 'organization_updated', entity_type: 'organization', entity_id: organizations[4].id, metadata: { field: 'focus_areas' }, timestamp: shiftDays(-2) },
+        { actor_id: researcherUsers[5].id, action: 'application_submitted', entity_type: 'project', entity_id: projects[4].project_id, metadata: { channel: 'dashboard' }, timestamp: shiftDays(-1) },
+        { actor_id: adminUser.id, action: 'dashboard_exported', entity_type: 'system', entity_id: null, metadata: { report: 'weekly_activity' }, timestamp: shiftDays(0) }
+      ];
+
+      auditLogs = await AuditLog.bulkCreate(auditPayload);
+      console.log(`✓ Created ${auditLogs.length} audit log records\n`);
+    } else {
+      auditLogs = await AuditLog.findAll();
+      console.log(`✓ Found ${auditLogs.length} existing audit log records\n`);
+    }
+
+    // ==================== STEP 19: Create Attachment Metadata ====================
+    console.log('📎 Step 19: Creating Attachment Metadata Records...');
+
+    let attachments;
+    const existingAttachments = await Attachment.count();
+    if (existingAttachments === 0 && projects.length > 0) {
+      const nonprofitByOrg = new Map(
+        nonprofitUsers
+          .filter((nonprofitUser) => nonprofitUser.org_id)
+          .map((nonprofitUser) => [nonprofitUser.org_id, nonprofitUser])
+      );
+
+      const targetProjects = projects.filter((project) => ['open', 'in_progress', 'completed'].includes(project.status)).slice(0, 5);
+      const attachmentPayload = targetProjects.map((project, index) => {
+        const owner = nonprofitByOrg.get(project.org_id);
+        const uploadedBy = owner ? owner.id : adminUser.id;
+
+        return {
+          filename: [
+            'research_proposal.pdf',
+            'data_collection_template.xlsx',
+            'methodology_notes.docx',
+            'participant_onboarding_checklist.pdf',
+            'outcomes_dashboard_spec.csv'
+          ][index],
+          mimetype: [
+            'application/pdf',
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'application/pdf',
+            'text/csv'
+          ][index],
+          size: [348210, 193004, 142882, 276901, 98122][index],
+          storage_key: `seeded/attachments/project-${project.project_id}/artifact-${index + 1}`,
+          project_id: project.project_id,
+          uploaded_by: uploadedBy,
+          status: index === 3 ? 'quarantined' : 'active',
+          version: 1,
+          is_latest: true,
+          scan_status: index === 3 ? 'infected' : 'clean',
+          scanned_at: shiftDays(-(index + 1)),
+          quarantine_reason: index === 3 ? 'Flagged during malware scan simulation for QA testing.' : null,
+          retention_expires_at: shiftDays(180 + index * 30),
+          created_at: shiftDays(-(index + 6)),
+          updated_at: shiftDays(-(index + 2))
+        };
+      });
+
+      attachments = await Attachment.bulkCreate(attachmentPayload);
+      console.log(`✓ Created ${attachments.length} attachment metadata records\n`);
+    } else {
+      attachments = await Attachment.findAll();
+      console.log(`✓ Found ${attachments.length} existing attachment metadata records\n`);
+    }
+
+    // ==================== STEP 20: Summary ====================
     console.log('\n✅ Database seeding completed successfully!\n');
     console.log('═══════════════════════════════════════════════════════════');
     console.log('Summary of Records:');
@@ -1053,6 +1524,14 @@ async function seedDatabase() {
     console.log(`Academic History:       ${academicHistory.length}`);
     console.log(`Certifications:         ${certifications.length}`);
     console.log(`Applications/Agreements: ${applications.length}`);
+    console.log(`Matches:                ${matches.length}`);
+    console.log(`Project Reviews:        ${projectReviews.length}`);
+    console.log(`Saved Projects:         ${savedProjects.length}`);
+    console.log(`Messages:               ${messages.length}`);
+    console.log(`Ratings:                ${ratings.length}`);
+    console.log(`Notifications:          ${notifications.length}`);
+    console.log(`Audit Logs:             ${auditLogs.length}`);
+    console.log(`Attachments:            ${attachments.length}`);
     console.log('═══════════════════════════════════════════════════════════');
     console.log('\n📝 Login Credentials:');
     console.log('═══════════════════════════════════════════════════════════');

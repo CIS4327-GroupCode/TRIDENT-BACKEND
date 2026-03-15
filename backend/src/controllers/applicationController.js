@@ -41,11 +41,12 @@ exports.applyToProject = async (req, res) => {
     const existingApplication = await Application.findOne({
       where: {
         researcher_id: researcherProfile.user_id,
-        org_id: project.org_id
-        // Note: Application model needs project_id field; using org_id as partial match for now
+        project_id: project.project_id,
+        type: 'project_application',
+        status: 'pending'
       }
     });
-    if (existingApplication && existingApplication.status === 'pending') {
+    if (existingApplication) {
       return res.status(409).json({ error: 'You have already applied to this project' });
     }
 
@@ -53,6 +54,7 @@ exports.applyToProject = async (req, res) => {
     const application = await Application.create({
       researcher_id: researcherProfile.user_id,
       org_id: project.org_id,
+      project_id: project.project_id,
       status: 'pending',
       type: 'project_application',
       value: message || null,
@@ -137,7 +139,12 @@ exports.getProjectApplications = async (req, res) => {
     }
 
     // Build query
-    const where = { org_id: project.org_id };
+    const where = {
+      project_id: project.project_id,
+      type: {
+        [Op.ne]: 'invitation'
+      }
+    };
     if (status) {
       where.status = status;
     }
@@ -204,6 +211,14 @@ exports.acceptApplication = async (req, res) => {
       return res.status(403).json({ error: 'Unauthorized' });
     }
 
+    const applicationProjectId = application.project_id || application.metadata?.project_id;
+    if (applicationProjectId) {
+      const project = await Project.findByPk(applicationProjectId);
+      if (!project || project.org_id !== user.org_id) {
+        return res.status(403).json({ error: 'Unauthorized' });
+      }
+    }
+
     if (application.status !== 'pending') {
       return res.status(400).json({ error: 'Application is not pending' });
     }
@@ -213,7 +228,7 @@ exports.acceptApplication = async (req, res) => {
     await application.save();
 
     // Get project and researcher details for notification
-    const projectId = application.metadata?.project_id;
+    const projectId = application.project_id || application.metadata?.project_id;
     const project = projectId ? await Project.findByPk(projectId) : null;
     const researcherUser = await User.findByPk(application.researcher_id);
 
@@ -277,6 +292,14 @@ exports.rejectApplication = async (req, res) => {
       return res.status(403).json({ error: 'Unauthorized' });
     }
 
+    const applicationProjectId = application.project_id || application.metadata?.project_id;
+    if (applicationProjectId) {
+      const project = await Project.findByPk(applicationProjectId);
+      if (!project || project.org_id !== user.org_id) {
+        return res.status(403).json({ error: 'Unauthorized' });
+      }
+    }
+
     if (application.status !== 'pending') {
       return res.status(400).json({ error: 'Application is not pending' });
     }
@@ -288,7 +311,7 @@ exports.rejectApplication = async (req, res) => {
     await application.save();
 
     // Get project and researcher details for notification
-    const projectId = application.metadata?.project_id;
+    const projectId = application.project_id || application.metadata?.project_id;
     const project = projectId ? await Project.findByPk(projectId) : null;
     const researcherUser = await User.findByPk(application.researcher_id);
 
@@ -407,14 +430,12 @@ exports.inviteResearcher = async (req, res) => {
       where: {
         researcher_id: researcherId,
         org_id: user.org_id,
+        project_id: project.project_id,
         type: 'invitation',
         status: 'pending'
       }
     });
-    const duplicate = existingInvitations.find(
-      inv => inv.metadata && String(inv.metadata.project_id) === String(projectId)
-    );
-    if (duplicate) {
+    if (existingInvitations.length > 0) {
       return res.status(409).json({ error: 'Invitation already sent for this project' });
     }
 
@@ -422,6 +443,7 @@ exports.inviteResearcher = async (req, res) => {
     const invitation = await Application.create({
       researcher_id: researcherId,
       org_id: user.org_id,
+      project_id: project.project_id,
       status: 'pending',
       type: 'invitation',
       value: message || null,

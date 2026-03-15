@@ -18,6 +18,13 @@ describe('API Routes Integration', () => {
   let authToken;
   let testTimestamp;
 
+  async function hitEndpoint(endpoint, payload = {}) {
+    return request(app)
+      .post(endpoint)
+      .set('Authorization', `Bearer ${authToken}`)
+      .send(payload);
+  }
+
   beforeAll(async () => {
     // Ensure database connection
     try {
@@ -88,12 +95,12 @@ describe('API Routes Integration', () => {
           .send({
             name: 'New User',
             email: uniqueEmail,
-            password: 'password123',
+            password: 'Password123!',
             role: 'researcher'
           });
 
         expect(response.status).toBe(201);
-        expect(response.body).toHaveProperty('token');
+        expect(response.body).toHaveProperty('message');
         expect(response.body.user).toHaveProperty('email', uniqueEmail);
         expect(response.body.user).toHaveProperty('role', 'researcher');
 
@@ -112,7 +119,7 @@ describe('API Routes Integration', () => {
           .send({
             name: 'Duplicate User',
             email: testUser.email,
-            password: 'password123',
+            password: 'Password123!',
             role: 'researcher'
           });
 
@@ -146,6 +153,63 @@ describe('API Routes Integration', () => {
         expect(response.status).toBe(401);
         expect(response.body).toHaveProperty('error');
       });
+    });
+
+    describe('2FA rate limiting', () => {
+      it('should throttle /api/auth/2fa/send-enable after 5 requests in 15 minutes', async () => {
+        const responses = [];
+
+        for (let i = 0; i < 6; i += 1) {
+          responses.push(await hitEndpoint('/api/auth/2fa/send-enable'));
+        }
+
+        const firstFive = responses.slice(0, 5);
+        firstFive.forEach((response) => {
+          expect(response.status).not.toBe(429);
+        });
+
+        expect(responses[5].status).toBe(429);
+        expect(responses[5].headers).toHaveProperty('retry-after');
+        expect(responses[5].body).toHaveProperty('error', 'Too many requests. Please try again later.');
+      });
+
+      it('should throttle /api/auth/2fa/verify-enable after 5 requests in 15 minutes', async () => {
+        const responses = [];
+
+        for (let i = 0; i < 6; i += 1) {
+          responses.push(await hitEndpoint('/api/auth/2fa/verify-enable', { code: '123456' }));
+        }
+
+        const firstFive = responses.slice(0, 5);
+        firstFive.forEach((response) => {
+          expect(response.status).not.toBe(429);
+        });
+
+        expect(responses[5].status).toBe(429);
+        expect(responses[5].headers).toHaveProperty('retry-after');
+        expect(responses[5].body).toHaveProperty('error', 'Too many requests. Please try again later.');
+      });
+    });
+  });
+
+  describe('CORS policy', () => {
+    it('should reject requests from disallowed origins', async () => {
+      const response = await request(app)
+        .get('/health')
+        .set('Origin', 'https://malicious.example.com');
+
+      expect(response.status).toBe(500);
+      expect(response.body).toHaveProperty('error', 'Not allowed by CORS');
+    });
+
+    it('should allow requests from configured origins', async () => {
+      const response = await request(app)
+        .get('/health')
+        .set('Origin', 'http://localhost:5173');
+
+      expect(response.status).toBe(200);
+      expect(response.headers['access-control-allow-origin']).toBe('http://localhost:5173');
+      expect(response.body).toHaveProperty('status', 'ok');
     });
   });
 

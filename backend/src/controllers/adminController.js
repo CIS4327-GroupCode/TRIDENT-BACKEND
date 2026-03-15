@@ -1,7 +1,8 @@
-const { User, Organization, ResearcherProfile, Project, Milestone, ProjectReview, sequelize } = require('../database/models');
+const { User, Organization, ResearcherProfile, Project, Milestone, ProjectReview, Attachment, sequelize } = require('../database/models');
 const { Op } = require('sequelize');
 const bcrypt = require('bcryptjs');
 const notificationService = require('../services/notificationService');
+const { getStorageAdapter } = require('../services/storage');
 
 /**
  * Get dashboard statistics
@@ -955,6 +956,168 @@ const requestProjectChanges = async (req, res) => {
   }
 };
 
+/**
+ * Get all attachments for admin/compliance visibility.
+ * GET /admin/attachments
+ */
+const getAllAttachments = async (req, res) => {
+  try {
+    const {
+      page = 1,
+      limit = 20,
+      status,
+      scan_status,
+      projectId,
+      search
+    } = req.query;
+
+    const where = {};
+    if (status) {
+      where.status = status;
+    }
+    if (scan_status) {
+      where.scan_status = scan_status;
+    }
+    if (projectId && Number.isInteger(Number.parseInt(projectId, 10))) {
+      where.project_id = Number.parseInt(projectId, 10);
+    }
+    if (search) {
+      where.filename = {
+        [Op.iLike]: `%${search}%`
+      };
+    }
+
+    const parsedLimit = Math.min(Math.max(Number.parseInt(limit, 10) || 20, 1), 100);
+    const parsedPage = Math.max(Number.parseInt(page, 10) || 1, 1);
+    const offset = (parsedPage - 1) * parsedLimit;
+
+    const { count, rows } = await Attachment.findAndCountAll({
+      where,
+      include: [
+        {
+          model: Project,
+          as: 'project',
+          attributes: ['project_id', 'title', 'org_id'],
+          include: [
+            {
+              model: Organization,
+              as: 'organization',
+              attributes: ['id', 'name']
+            }
+          ]
+        },
+        {
+          model: User,
+          as: 'uploader',
+          attributes: ['id', 'name', 'email']
+        }
+      ],
+      limit: parsedLimit,
+      offset,
+      order: [['created_at', 'DESC']]
+    });
+
+    return res.status(200).json({
+      attachments: rows,
+      pagination: {
+        total: count,
+        page: parsedPage,
+        limit: parsedLimit,
+        totalPages: Math.ceil(count / parsedLimit)
+      }
+    });
+  } catch (error) {
+    console.error('Get admin attachments error:', error);
+    return res.status(500).json({ error: 'Failed to fetch attachments' });
+  }
+};
+
+/**
+ * Get aggregated attachment stats for admin dashboard.
+ * GET /admin/attachments/stats
+ */
+const getAttachmentStats = async (req, res) => {
+  try {
+    const [
+      total,
+      active,
+      deleted,
+      quarantined,
+      infected,
+      totalBytes,
+      recentUploads
+    ] = await Promise.all([
+      Attachment.count(),
+      Attachment.count({ where: { status: 'active' } }),
+      Attachment.count({ where: { status: 'deleted' } }),
+      Attachment.count({ where: { status: 'quarantined' } }),
+      Attachment.count({ where: { scan_status: 'infected' } }),
+      Attachment.sum('size', {
+        where: {
+          status: {
+            [Op.ne]: 'deleted'
+          }
+        }
+      }),
+      Attachment.count({
+        where: {
+          created_at: {
+            [Op.gte]: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
+          }
+        }
+      })
+    ]);
+
+    return res.status(200).json({
+      stats: {
+        totalAttachments: total,
+        activeAttachments: active,
+        deletedAttachments: deleted,
+        quarantinedAttachments: quarantined,
+        infectedScans: infected,
+        storedBytes: totalBytes || 0,
+        recentUploads7d: recentUploads
+      }
+    });
+  } catch (error) {
+    console.error('Get attachment stats error:', error);
+    return res.status(500).json({ error: 'Failed to fetch attachment stats' });
+  }
+};
+
+/**
+ * Force-delete an attachment as admin.
+ * DELETE /admin/attachments/:id
+ */
+const forceDeleteAttachment = async (req, res) => {
+  try {
+    const attachmentId = Number.parseInt(req.params.id, 10);
+    if (!Number.isInteger(attachmentId)) {
+      return res.status(400).json({ error: 'Invalid attachment id' });
+    }
+
+    const attachment = await Attachment.findByPk(attachmentId);
+    if (!attachment) {
+      return res.status(404).json({ error: 'Attachment not found' });
+    }
+
+    if (attachment.storage_key) {
+      const storageAdapter = getStorageAdapter();
+      await storageAdapter.delete(attachment.storage_key);
+    }
+
+    attachment.status = 'deleted';
+    attachment.is_latest = false;
+    attachment.retention_expires_at = new Date();
+    await attachment.save();
+
+    return res.status(200).json({ message: 'Attachment force-deleted successfully' });
+  } catch (error) {
+    console.error('Force delete attachment error:', error);
+    return res.status(500).json({ error: 'Failed to force delete attachment' });
+  }
+};
+
 module.exports = {
   getDashboardStats,
   getAllUsers,
@@ -975,5 +1138,8 @@ module.exports = {
   getPendingProjects,
   approveProject,
   rejectProject,
-  requestProjectChanges
+  requestProjectChanges,
+  getAllAttachments,
+  getAttachmentStats,
+  forceDeleteAttachment
 };

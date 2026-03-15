@@ -16,6 +16,18 @@ const registerLimiter = createRateLimiter({
 	keySelector: (req) => `${req.ip}:${String(req.body?.email || '').trim().toLowerCase()}`,
 });
 
+const twoFactorSendLimiter = createRateLimiter({
+	windowMs: 15 * 60 * 1000,
+	maxRequests: 5,
+	keySelector: (req) => `${req.ip}:${String(req.body?.email || '').trim().toLowerCase()}`,
+});
+
+const twoFactorVerifyLimiter = createRateLimiter({
+	windowMs: 15 * 60 * 1000,
+	maxRequests: 5,
+	keySelector: (req) => `${req.ip}:${String(req.body?.email || '').trim().toLowerCase()}`,
+});
+
 // Register route
 router.post('/register', registerLimiter, authController.register);
 // Login route
@@ -30,8 +42,8 @@ router.post('/request-password-reset', authLimiter, authController.requestPasswo
 router.post('/reset-password', authLimiter, authController.resetPassword);
 
 // Enable 2 Factor authentication route
-router.post('/2fa/send-enable', authenticate, authController.sendEnable2FACode);
-router.post('/2fa/verify-enable', authenticate, authController.verifyEnable2FACode);
+router.post('/2fa/send-enable', authenticate, twoFactorSendLimiter, authController.sendEnable2FACode);
+router.post('/2fa/verify-enable', authenticate, twoFactorVerifyLimiter, authController.verifyEnable2FACode);
 
 
 module.exports = router;

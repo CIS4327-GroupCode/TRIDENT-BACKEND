@@ -1,4 +1,23 @@
 const { Organization, User } = require('../database/models');
+const { logAudit, AUDIT_ACTIONS } = require('../utils/auditLogger');
+
+function trimStringFields(input = {}) {
+  const output = {};
+  Object.keys(input).forEach((key) => {
+    const value = input[key];
+    output[key] = typeof value === 'string' ? value.trim() : value;
+  });
+  return output;
+}
+
+function isValidWebsite(urlValue) {
+  try {
+    const url = new URL(urlValue);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch (error) {
+    return false;
+  }
+}
 
 /**
  * Get current user's organization
@@ -44,15 +63,44 @@ const updateOrganization = async (req, res) => {
       'focus_tags',
       'compliance_flags',
       'contacts',
+      'type',
+      'location',
+      'website',
+      'focus_areas',
+      'budget_range',
+      'team_size',
+      'established_year',
     ];
 
     // Keep only allowed fields from body
     const updates = {};
-    Object.keys(req.body).forEach((key) => {
-      if (allowedFields.includes(key) && req.body[key] !== undefined) {
-        updates[key] = req.body[key];
+    const sanitizedBody = trimStringFields(req.body || {});
+    Object.keys(sanitizedBody).forEach((key) => {
+      if (allowedFields.includes(key) && sanitizedBody[key] !== undefined) {
+        updates[key] = sanitizedBody[key];
       }
     });
+
+    if (updates.website && !isValidWebsite(updates.website)) {
+      return res.status(400).json({ error: 'Website must be a valid http(s) URL' });
+    }
+
+    if (updates.team_size !== undefined) {
+      const parsedTeamSize = Number(updates.team_size);
+      if (!Number.isInteger(parsedTeamSize) || parsedTeamSize <= 0) {
+        return res.status(400).json({ error: 'team_size must be a positive integer' });
+      }
+      updates.team_size = parsedTeamSize;
+    }
+
+    if (updates.established_year !== undefined) {
+      const parsedYear = Number(updates.established_year);
+      const currentYear = new Date().getFullYear() + 1;
+      if (!Number.isInteger(parsedYear) || parsedYear < 1800 || parsedYear > currentYear) {
+        return res.status(400).json({ error: 'established_year must be a valid year' });
+      }
+      updates.established_year = parsedYear;
+    }
 
     if (Object.keys(updates).length === 0) {
       return res.status(400).json({ error: 'No valid update fields provided' });
@@ -77,6 +125,14 @@ const updateOrganization = async (req, res) => {
       // Org exists → just update
       await organization.update(updates);
     }
+
+    void logAudit({
+      actorId: userId,
+      action: AUDIT_ACTIONS.ORGANIZATION_UPDATE,
+      entityType: 'ORGANIZATION',
+      entityId: organization.id,
+      metadata: { updatedFields: Object.keys(updates) },
+    });
 
     return res.status(200).json({
       message: 'Organization saved successfully',

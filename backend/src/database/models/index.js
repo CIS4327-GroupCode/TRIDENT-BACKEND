@@ -17,6 +17,8 @@ const Notification = require('./Notification');
 const EmailVerification = require('./EmailVerification');
 const PasswordReset = require('./PasswordReset');
 const TwoFactorCode = require('./TwoFactorCode');
+const Attachment = require('./Attachment');
+const Contract = require('./Contract');
 const sequelize = require('../index');
 
 // User <-> ResearcherProfile (one-to-one)
@@ -43,6 +45,10 @@ Application.belongsTo(ResearcherProfile, { foreignKey: 'researcher_id', as: 'res
 Organization.hasMany(Application, { foreignKey: 'org_id', as: 'applications' });
 Application.belongsTo(Organization, { foreignKey: 'org_id', as: 'organization' });
 
+// Project <-> Application
+Project.hasMany(Application, { foreignKey: 'project_id', as: 'applications' });
+Application.belongsTo(Project, { foreignKey: 'project_id', as: 'project' });
+
 // Project <-> Match
 Project.hasMany(Match, { foreignKey: 'brief_id', as: 'matches' });
 Match.belongsTo(Project, { foreignKey: 'brief_id', as: 'project' });
@@ -55,9 +61,23 @@ Match.belongsTo(ResearcherProfile, { foreignKey: 'researcher_id', as: 'researche
 Project.hasMany(Rating, { foreignKey: 'project_id', as: 'ratings' });
 Rating.belongsTo(Project, { foreignKey: 'project_id', as: 'project' });
 
+// User <-> Rating (reviewer)
+User.hasMany(Rating, { foreignKey: 'rated_by_user_id', as: 'givenRatings' });
+Rating.belongsTo(User, { foreignKey: 'rated_by_user_id', as: 'reviewer' });
+
+// User <-> Rating (reviewed user)
+User.hasMany(Rating, { foreignKey: 'rated_user_id', as: 'receivedRatings' });
+Rating.belongsTo(User, { foreignKey: 'rated_user_id', as: 'reviewedUser' });
+
+// User <-> Rating (moderator)
+User.hasMany(Rating, { foreignKey: 'moderated_by', as: 'moderatedRatings' });
+Rating.belongsTo(User, { foreignKey: 'moderated_by', as: 'moderator' });
+
 // Project <-> Milestone
 Project.hasMany(Milestone, { foreignKey: 'project_id', as: 'milestones' });
 Milestone.belongsTo(Project, { foreignKey: 'project_id', as: 'project' });
+Milestone.belongsTo(Milestone, { foreignKey: 'depends_on', as: 'dependency' });
+Milestone.hasMany(Milestone, { foreignKey: 'depends_on', as: 'dependents' });
 
 // User <-> Message (sender)
 User.hasMany(Message, { foreignKey: 'sender_id', as: 'sentMessages' });
@@ -111,6 +131,34 @@ SavedProject.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
 Project.hasMany(SavedProject, { foreignKey: 'project_id', as: 'savedEntries' });
 SavedProject.belongsTo(Project, { foreignKey: 'project_id', as: 'project' });
 
+// Project <-> Attachment
+Project.hasMany(Attachment, { foreignKey: 'project_id', as: 'attachments' });
+Attachment.belongsTo(Project, { foreignKey: 'project_id', as: 'project' });
+
+// User <-> Attachment (uploader)
+User.hasMany(Attachment, { foreignKey: 'uploaded_by', as: 'uploadedAttachments' });
+Attachment.belongsTo(User, { foreignKey: 'uploaded_by', as: 'uploader' });
+
+// Application <-> Contract
+Application.hasMany(Contract, { foreignKey: 'application_id', as: 'contracts' });
+Contract.belongsTo(Application, { foreignKey: 'application_id', as: 'application' });
+
+// Project <-> Contract
+Project.hasMany(Contract, { foreignKey: 'project_id', as: 'contracts' });
+Contract.belongsTo(Project, { foreignKey: 'project_id', as: 'project' });
+
+// User <-> Contract (nonprofit signer)
+User.hasMany(Contract, { foreignKey: 'nonprofit_user_id', as: 'nonprofitContracts' });
+Contract.belongsTo(User, { foreignKey: 'nonprofit_user_id', as: 'nonprofitUser' });
+
+// User <-> Contract (researcher signer)
+User.hasMany(Contract, { foreignKey: 'researcher_user_id', as: 'researcherContracts' });
+Contract.belongsTo(User, { foreignKey: 'researcher_user_id', as: 'researcherUser' });
+
+// User <-> Contract (terminated by)
+User.hasMany(Contract, { foreignKey: 'terminated_by', as: 'terminatedContracts' });
+Contract.belongsTo(User, { foreignKey: 'terminated_by', as: 'terminator' });
+
 module.exports = {
   User,
   Organization,
@@ -131,5 +179,7 @@ module.exports = {
   EmailVerification,
   PasswordReset,
   TwoFactorCode,
+  Attachment,
+  Contract,
   sequelize
 };

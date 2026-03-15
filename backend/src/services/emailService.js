@@ -225,8 +225,7 @@ const sendPasswordResetEmail = async (email, name, resetToken) => {
  * @param {Object} notification - Notification object with type, title, message, link
  * @returns {Promise<Object>} Nodemailer result
  */
-const sendNotificationEmail = async (email, name, notification) => {
-  const { type, title, message, link } = notification;
+const sendNotificationEmail = async (email, name, { type, title, message, link }) => {
   const actionLink = link ? `${process.env.APP_URL || 'http://localhost:3000'}${link}` : null;
   
   const html = `
@@ -462,6 +461,7 @@ const testConnection = async () => {
 module.exports = {
   sendVerificationEmail,
   sendPasswordResetEmail,
+  sendTwoFactorCodeEmail,
   sendNotificationEmail,
   sendWeeklyDigest,
   testConnection,

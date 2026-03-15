@@ -5,18 +5,7 @@ const jwt = require("jsonwebtoken");
 const { EmailVerification, PasswordReset, User } = require('../database/models');
 const TwoFactorCode = require('../database/models/TwoFactorCode');
 const emailService = require('../services/emailService');
-
-const PASSWORD_POLICY_MESSAGE = 'Password must be at least 8 characters and include uppercase, lowercase, number, and special character.';
-
-function isStrongPassword(password) {
-  const value = String(password || '');
-  if (value.length < 8) return false;
-  if (!/[A-Z]/.test(value)) return false;
-  if (!/[a-z]/.test(value)) return false;
-  if (!/[0-9]/.test(value)) return false;
-  if (!/[^A-Za-z0-9]/.test(value)) return false;
-  return true;
-}
+const { PASSWORD_POLICY_MESSAGE, isStrongPassword } = require('../utils/passwordPolicy');
 
 
 // Register new user
@@ -152,6 +141,17 @@ exports.login = async (req, res) => {
     // Check if email is verified
     const pendingVerification = await EmailVerification.findByUserId(found.id);
     if (pendingVerification) {
+      let verificationPurpose = 'email-verification';
+      try {
+        const decodedToken = jwt.verify(pendingVerification.token, process.env.JWT_SECRET);
+        verificationPurpose = decodedToken.purpose || verificationPurpose;
+      } catch (decodeError) {
+        verificationPurpose = 'email-verification';
+      }
+
+      if (verificationPurpose === 'email-change-verification') {
+        // Allow existing email login while the new address is being verified.
+      } else {
       // Check if token expired
       if (pendingVerification.isExpired()) {
         return res.status(401).json({ 
@@ -168,6 +168,7 @@ exports.login = async (req, res) => {
         message: 'Please verify your email before logging in. Check your inbox.',
         email: found.email
       });
+      }
     }
 
     // build a safe user object without sensitive fields
@@ -246,7 +247,27 @@ exports.verifyEmail = async (req, res) => {
       });
     }
 
-    // Delete verification record (marks user as verified)
+    const user = await User.findByPk(decoded.userId);
+    if (!user) {
+      return res.status(400).json({ error: 'User not found for this verification token' });
+    }
+
+    if (decoded.purpose === 'email-change-verification') {
+      const targetEmail = String(decoded.email || '').trim().toLowerCase();
+      const conflictingUser = await User.findOne({ where: { email: targetEmail } });
+      if (conflictingUser && conflictingUser.id !== user.id) {
+        return res.status(409).json({ error: 'Email already in use' });
+      }
+
+      user.email = targetEmail;
+      user.account_status = 'active';
+      await user.save();
+    } else {
+      user.account_status = 'active';
+      await user.save();
+    }
+
+    // Delete verification record after successful verification/update.
     await verification.destroy();
 
     res.json({ 
