@@ -21,6 +21,9 @@
     "db:sync:nonprod": "node sync-nonprod-db.js",
     "db:sync:dev": "node sync-nonprod-db.js --env development",
     "db:sync:staging": "node sync-nonprod-db.js --env staging",
+    "db:sync:schema": "node scripts/db-sync-schema.js",
+    "db:sync:diff": "node scripts/db-sync-diff.js",
+    "db:sync:merge": "node scripts/db-sync-merge.js",
     "migrate": "sequelize-cli db:migrate",
     "build": "npm ci --omit=dev && npm run migrate && echo 'Backend Built Successfully'"
   },
