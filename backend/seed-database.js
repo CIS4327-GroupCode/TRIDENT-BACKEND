@@ -1546,8 +1546,13 @@ async function seedDatabase() {
     });
     console.log('');
     console.log('RESEARCHERS:');
+    const researcherProfileByUserId = new Map(
+      researchers.map((profile) => [String(profile.user_id), profile])
+    );
     researcherUsers.forEach((user, i) => {
-      console.log(`  ${user.email.padEnd(35)} | ${researchers[i].affiliation}`);
+      const profile = researcherProfileByUserId.get(String(user.id));
+      const affiliation = profile?.affiliation || 'No profile affiliation found';
+      console.log(`  ${user.email.padEnd(35)} | ${affiliation}`);
     });
     console.log('═══════════════════════════════════════════════════════════\n');
 
