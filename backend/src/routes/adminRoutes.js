@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const adminController = require('../controllers/adminController');
-const reviewController = require('../controllers/reviewController');
+const ratingController = require('../controllers/ratingController');
 const agreementController = require('../controllers/agreementController');
 const { authenticate, requireAdmin } = require('../middleware/auth');
 
@@ -46,10 +46,10 @@ router.get('/attachments', adminController.getAllAttachments);
 router.get('/attachments/stats', adminController.getAttachmentStats);
 router.delete('/attachments/:id', adminController.forceDeleteAttachment);
 
-// Review Moderation (UC5)
-router.get('/reviews', reviewController.getAdminReviews);
-router.get('/reviews/stats', reviewController.getAdminReviewStats);
-router.put('/reviews/:reviewId/moderate', reviewController.moderateReview);
+// Rating Moderation (UC5)
+router.get('/ratings', ratingController.getAdminRatings);
+router.get('/ratings/stats', ratingController.getAdminRatingStats);
+router.put('/ratings/:ratingId/moderate', ratingController.moderateRating);
 
 // Agreement Governance (UC11)
 router.get('/agreements', agreementController.adminListAgreements);

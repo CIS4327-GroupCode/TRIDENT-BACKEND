@@ -5,6 +5,7 @@
 
 const { Notification } = require('../database/models');
 const { Op } = require('sequelize');
+const schedule = require('node-schedule');
 
 /**
  * Archive old notifications (mark as archived after 15 days)
@@ -81,8 +82,6 @@ exports.runCleanup = async () => {
  * Call this in your server startup (index.js or similar)
  */
 exports.scheduleCleanup = () => {
-  const schedule = require('node-schedule');
-
   // Run at 2 AM every day
   const job = schedule.scheduleJob('0 2 * * *', async () => {
     console.log('[Notification Cleanup] Scheduled cleanup starting...');

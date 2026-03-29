@@ -11,9 +11,9 @@ router.use('/:projectId/milestones', milestoneRoutes);
 const attachmentRoutes = require('./attachmentRoutes');
 router.use('/:projectId/attachments', attachmentRoutes);
 
-// Mount review routes under /projects/:projectId/reviews
-const reviewRoutes = require('./reviewRoutes');
-router.use('/:projectId/reviews', reviewRoutes);
+// Mount rating routes under /projects/:projectId/ratings
+const ratingRoutes = require('./ratingRoutes');
+router.use('/:projectId/ratings', ratingRoutes);
 
 /**
  * Public routes (no authentication required)

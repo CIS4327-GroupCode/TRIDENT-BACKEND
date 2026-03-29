@@ -27,13 +27,13 @@ jest.mock('../../src/controllers/adminController', () => ({
   forceDeleteAttachment: (req, res) => res.status(200).json({})
 }));
 
-jest.mock('../../src/controllers/reviewController', () => ({
-  getAdminReviews: (req, res) =>
-    res.status(200).json({ reviews: [{ id: 11, status: req.query.status || 'active' }] }),
-  getAdminReviewStats: (req, res) =>
+jest.mock('../../src/controllers/ratingController', () => ({
+  getAdminRatings: (req, res) =>
+    res.status(200).json({ ratings: [{ id: 11, status: req.query.status || 'active' }] }),
+  getAdminRatingStats: (req, res) =>
     res.status(200).json({ stats: { total: 1, active: 1, flagged: 0, removed: 0 } }),
-  moderateReview: (req, res) =>
-    res.status(200).json({ message: 'ok', review: { id: Number(req.params.reviewId), action: req.body.action } })
+  moderateRating: (req, res) =>
+    res.status(200).json({ message: 'ok', rating: { id: Number(req.params.ratingId), action: req.body.action } })
 }));
 
 jest.mock('../../src/middleware/auth', () => ({
@@ -54,7 +54,7 @@ jest.mock('../../src/middleware/auth', () => ({
 
 const adminRoutes = require('../../src/routes/adminRoutes');
 
-describe('admin review routes integration', () => {
+describe('admin rating routes integration', () => {
   let app;
 
   beforeEach(() => {
@@ -63,33 +63,33 @@ describe('admin review routes integration', () => {
     app.use('/api/admin', adminRoutes);
   });
 
-  test('requires authentication for review moderation endpoints', async () => {
-    const response = await request(app).get('/api/admin/reviews');
+  test('requires authentication for rating moderation endpoints', async () => {
+    const response = await request(app).get('/api/admin/ratings');
     expect(response.status).toBe(401);
   });
 
-  test('requires admin role for review moderation endpoints', async () => {
+  test('requires admin role for rating moderation endpoints', async () => {
     const response = await request(app)
-      .get('/api/admin/reviews')
+      .get('/api/admin/ratings')
       .set('Authorization', 'Bearer token')
       .set('x-role', 'researcher');
 
     expect(response.status).toBe(403);
   });
 
-  test('returns admin reviews for authorized admin', async () => {
+  test('returns admin ratings for authorized admin', async () => {
     const response = await request(app)
-      .get('/api/admin/reviews?status=flagged')
+      .get('/api/admin/ratings?status=flagged')
       .set('Authorization', 'Bearer token')
       .set('x-role', 'admin');
 
     expect(response.status).toBe(200);
-    expect(response.body.reviews[0].status).toBe('flagged');
+    expect(response.body.ratings[0].status).toBe('flagged');
   });
 
-  test('returns admin review stats for authorized admin', async () => {
+  test('returns admin rating stats for authorized admin', async () => {
     const response = await request(app)
-      .get('/api/admin/reviews/stats')
+      .get('/api/admin/ratings/stats')
       .set('Authorization', 'Bearer token')
       .set('x-role', 'admin');
 
@@ -97,15 +97,15 @@ describe('admin review routes integration', () => {
     expect(response.body.stats.total).toBe(1);
   });
 
-  test('moderates a review for authorized admin', async () => {
+  test('moderates a rating for authorized admin', async () => {
     const response = await request(app)
-      .put('/api/admin/reviews/15/moderate')
+      .put('/api/admin/ratings/15/moderate')
       .set('Authorization', 'Bearer token')
       .set('x-role', 'admin')
       .send({ action: 'flag', reason: 'Needs review' });
 
     expect(response.status).toBe(200);
-    expect(response.body.review.id).toBe(15);
-    expect(response.body.review.action).toBe('flag');
+    expect(response.body.rating.id).toBe(15);
+    expect(response.body.rating.action).toBe('flag');
   });
 });

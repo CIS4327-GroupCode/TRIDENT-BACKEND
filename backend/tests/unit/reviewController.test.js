@@ -18,9 +18,9 @@ const {
   ResearcherProfile
 } = require('../../src/database/models');
 
-const reviewController = require('../../src/controllers/reviewController');
+const ratingController = require('../../src/controllers/ratingController');
 
-describe('reviewController submitProjectReview', () => {
+describe('ratingController submitProjectRating', () => {
   let req;
   let res;
 
@@ -49,7 +49,7 @@ describe('reviewController submitProjectReview', () => {
   test('requires reviewed_user_id when nonprofit project has multiple accepted researchers', async () => {
     Application.findAll.mockResolvedValue([{ researcher_id: 31 }, { researcher_id: 32 }]);
 
-    await reviewController.submitProjectReview(req, res);
+    await ratingController.submitProjectRating(req, res);
 
     expect(res.status).toHaveBeenCalledWith(400);
     expect(res.json).toHaveBeenCalledWith(
@@ -61,7 +61,7 @@ describe('reviewController submitProjectReview', () => {
     req.body.reviewed_user_id = 99;
     Application.findAll.mockResolvedValue([{ researcher_id: 31 }, { researcher_id: 32 }]);
 
-    await reviewController.submitProjectReview(req, res);
+    await ratingController.submitProjectRating(req, res);
 
     expect(res.status).toHaveBeenCalledWith(400);
     expect(res.json).toHaveBeenCalledWith(
@@ -73,7 +73,7 @@ describe('reviewController submitProjectReview', () => {
     req.body.reviewed_user_id = 31;
     Application.findAll.mockResolvedValue([{ researcher_id: 31 }, { researcher_id: 32 }]);
 
-    await reviewController.submitProjectReview(req, res);
+    await ratingController.submitProjectRating(req, res);
 
     expect(Rating.create).toHaveBeenCalledWith(expect.objectContaining({
       project_id: 9,
@@ -89,7 +89,7 @@ describe('reviewController submitProjectReview', () => {
     Application.findOne.mockResolvedValue({ id: 201, project_id: 9, researcher_id: 41, status: 'accepted' });
     User.findOne.mockResolvedValue({ id: 7, role: 'nonprofit', org_id: 3 });
 
-    await reviewController.submitProjectReview(req, res);
+    await ratingController.submitProjectRating(req, res);
 
     expect(Rating.create).toHaveBeenCalledWith(expect.objectContaining({ rated_user_id: 7 }));
     expect(res.status).toHaveBeenCalledWith(201);

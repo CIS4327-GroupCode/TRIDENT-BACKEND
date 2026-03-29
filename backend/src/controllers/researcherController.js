@@ -456,10 +456,18 @@ const getResearcherProjects = async (req, res) => {
       return res.status(404).json({ error: 'Researcher profile not found' });
     }
 
-    // Get applications/agreements for this researcher
+    // Get accepted applications with linked projects so rating actions can use real project ids/statuses.
     const applications = await Application.findAll({
-      where: { researcher_id: researcherProfile.user_id },
+      where: {
+        researcher_id: researcherProfile.user_id,
+        status: 'accepted'
+      },
       include: [
+        {
+          model: Project,
+          as: 'project',
+          attributes: ['project_id', 'title', 'status', 'timeline', 'budget_min', 'budget_max']
+        },
         {
           model: Organization,
           as: 'organization',
@@ -470,19 +478,27 @@ const getResearcherProjects = async (req, res) => {
     });
 
     // Transform applications to project format
-    const projects = applications.map(app => ({
-      id: app.id,
-      type: app.type || 'Collaboration Agreement',
-      status: app.type === 'completed' ? 'completed' : 'in_progress',
-      organization: app.organization ? {
-        name: app.organization.name,
-        mission: app.organization.mission,
-        focus_tags: app.organization.focus_tags
-      } : null,
-      budget_info: app.budget_info,
-      value: app.value,
-      created_at: app.created_at
-    }));
+    const projects = applications.map((app) => {
+      const projectStatus = app.project?.status || null;
+      const normalizedStatus = projectStatus === 'completed' ? 'completed' : 'in_progress';
+
+      return {
+        id: app.id,
+        project_id: app.project?.project_id || app.project_id || null,
+        title: app.project?.title || app.type || 'Collaboration Agreement',
+        type: app.type || app.project?.title || 'Collaboration Agreement',
+        status: normalizedStatus,
+        organization: app.organization ? {
+          name: app.organization.name,
+          mission: app.organization.mission,
+          focus_tags: app.organization.focus_tags
+        } : null,
+        timeline: app.project?.timeline || null,
+        budget_info: app.budget_info,
+        value: app.value,
+        created_at: app.created_at
+      };
+    });
 
     // Separate current and completed projects
     const currentProjects = projects.filter(p => p.status === 'in_progress');

@@ -501,6 +501,7 @@ const createProject = async (req, res) => {
       methods_required,
       timeline,
       budget_min,
+      budget_max,
       data_sensitivity,
       status,
     } = req.body;
@@ -522,6 +523,41 @@ const createProject = async (req, res) => {
       }
     }
 
+    if (budget_max !== undefined && budget_max !== null) {
+      const budgetMaxNum = parseFloat(budget_max);
+      if (isNaN(budgetMaxNum) || budgetMaxNum < 0) {
+        return res
+          .status(400)
+          .json({ error: 'Budget max must be a non-negative number' });
+      }
+    }
+
+    if (
+      budget_min !== undefined
+      && budget_min !== null
+      && budget_max !== undefined
+      && budget_max !== null
+      && parseFloat(budget_max) < parseFloat(budget_min)
+    ) {
+      return res.status(400).json({
+        error: 'Budget max must be greater than or equal to budget min',
+      });
+    }
+
+    const sensitivityAlias = {
+      low: 'Low',
+      medium: 'Medium',
+      high: 'High',
+    };
+    const normalizedSensitivity = data_sensitivity
+      ? sensitivityAlias[String(data_sensitivity).trim().toLowerCase()]
+      : null;
+    if (data_sensitivity && !normalizedSensitivity) {
+      return res.status(400).json({
+        error: 'data_sensitivity must be one of: Low, Medium, High',
+      });
+    }
+
     // Validate status if provided
     const validStatuses = ['draft', 'open', 'in_progress', 'completed', 'cancelled'];
     if (status && !validStatuses.includes(status)) {
@@ -538,7 +574,8 @@ const createProject = async (req, res) => {
       methods_required: methods_required ? methods_required.trim() : null,
       timeline: timeline ? timeline.trim() : null,
       budget_min: budget_min || null,
-      data_sensitivity: data_sensitivity ? data_sensitivity.trim() : null,
+      budget_max: budget_max || null,
+      data_sensitivity: normalizedSensitivity,
       status: status || 'draft',
       org_id: organization.id, // <- key line
     });
@@ -718,6 +755,7 @@ const updateProject = async (req, res) => {
       'methods_required',
       'timeline',
       'budget_min',
+      'budget_max',
       'data_sensitivity',
       'status',
     ];
@@ -750,6 +788,44 @@ const updateProject = async (req, res) => {
           .status(400)
           .json({ error: 'Budget must be a non-negative number' });
       }
+    }
+
+    if (updates.budget_max !== undefined && updates.budget_max !== null) {
+      const budgetMaxNum = parseFloat(updates.budget_max);
+      if (isNaN(budgetMaxNum) || budgetMaxNum < 0) {
+        return res
+          .status(400)
+          .json({ error: 'Budget max must be a non-negative number' });
+      }
+    }
+
+    const nextBudgetMin = updates.budget_min !== undefined ? updates.budget_min : project.budget_min;
+    const nextBudgetMax = updates.budget_max !== undefined ? updates.budget_max : project.budget_max;
+    if (
+      nextBudgetMin !== undefined
+      && nextBudgetMin !== null
+      && nextBudgetMax !== undefined
+      && nextBudgetMax !== null
+      && parseFloat(nextBudgetMax) < parseFloat(nextBudgetMin)
+    ) {
+      return res.status(400).json({
+        error: 'Budget max must be greater than or equal to budget min',
+      });
+    }
+
+    if (updates.data_sensitivity !== undefined && updates.data_sensitivity !== null) {
+      const sensitivityAlias = {
+        low: 'Low',
+        medium: 'Medium',
+        high: 'High',
+      };
+      const normalizedSensitivity = sensitivityAlias[String(updates.data_sensitivity).trim().toLowerCase()];
+      if (!normalizedSensitivity) {
+        return res.status(400).json({
+          error: 'data_sensitivity must be one of: Low, Medium, High',
+        });
+      }
+      updates.data_sensitivity = normalizedSensitivity;
     }
 
     // Validate status if being updated

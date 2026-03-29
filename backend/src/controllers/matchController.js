@@ -192,13 +192,18 @@ const explainMatch = async (req, res) => {
         error: 'Authentication required'
       });
     }
+
+    const parsedProjectId = Number(projectId);
+    const parsedResearcherId = Number(researcherId);
+    if (!Number.isInteger(parsedProjectId) || !Number.isInteger(parsedResearcherId)) {
+      return res.status(400).json({
+        success: false,
+        error: 'projectId and researcherId must be valid integers'
+      });
+    }
     
     // Fetch project and researcher
-    const Project = require('../database/models/Project');
-    const ResearcherProfile = require('../database/models/ResearcherProfile');
-    const Organization = require('../database/models/Organization');
-    
-    const project = await Project.findByPk(projectId, {
+    const project = await Project.findByPk(parsedProjectId, {
       include: [{
         model: Organization,
         as: 'organization',
@@ -207,7 +212,7 @@ const explainMatch = async (req, res) => {
     });
     
     const researcher = await ResearcherProfile.findOne({
-      where: { user_id: researcherId }
+      where: { user_id: parsedResearcherId }
     });
     
     if (!project || !researcher) {
@@ -217,7 +222,7 @@ const explainMatch = async (req, res) => {
       });
     }
 
-    const isResearcherSelf = Number(req.user.id) === Number(researcherId);
+    const isResearcherSelf = Number(req.user.id) === parsedResearcherId;
     const canViewAsProjectOwner = canAccessProject(req.user, project);
 
     if (!isResearcherSelf && !canViewAsProjectOwner) {

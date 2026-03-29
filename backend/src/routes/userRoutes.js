@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const userController = require('../controllers/userController');
-const reviewController = require('../controllers/reviewController');
+const ratingController = require('../controllers/ratingController');
 const { authenticate } = require('../middleware/auth');
 const { createRateLimiter } = require('../middleware/rateLimit');
 
@@ -13,8 +13,8 @@ const passwordChangeLimiter = createRateLimiter({
 
 // Public routes (no authentication required)
 router.get('/browse/researchers', userController.browseResearchers);
-router.get('/:userId/reviews', reviewController.getUserReviews);
-router.get('/:userId/reviews/summary', reviewController.getUserReviewSummary);
+router.get('/:userId/ratings', ratingController.getUserRatings);
+router.get('/:userId/ratings/summary', ratingController.getUserRatingSummary);
 
 // All routes below require authentication
 router.use(authenticate);
