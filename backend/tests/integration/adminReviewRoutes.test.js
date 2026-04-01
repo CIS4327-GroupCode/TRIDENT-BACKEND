@@ -10,6 +10,7 @@ jest.mock('../../src/controllers/adminController', () => ({
   suspendUser: (req, res) => res.status(200).json({}),
   unsuspendUser: (req, res) => res.status(200).json({}),
   permanentlyDeleteUser: (req, res) => res.status(200).json({}),
+  createAdmin: (req, res) => res.status(201).json({ message: 'Admin account created successfully', user: {} }),
   getAllProjects: (req, res) => res.status(200).json({ projects: [] }),
   getPendingProjects: (req, res) => res.status(200).json({ projects: [] }),
   getProjectById: (req, res) => res.status(200).json({ project: {} }),
@@ -45,7 +46,13 @@ jest.mock('../../src/middleware/auth', () => ({
     return next();
   },
   requireAdmin: (req, res, next) => {
-    if (req.user.role !== 'admin') {
+    if (req.user.role !== 'admin' && req.user.role !== 'super_admin') {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+    return next();
+  },
+  requireSuperAdmin: (req, res, next) => {
+    if (req.user.role !== 'super_admin') {
       return res.status(403).json({ error: 'Forbidden' });
     }
     return next();

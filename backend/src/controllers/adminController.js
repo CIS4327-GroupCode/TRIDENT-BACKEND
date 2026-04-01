@@ -3,6 +3,7 @@ const { Op } = require('sequelize');
 const bcrypt = require('bcryptjs');
 const notificationService = require('../services/notificationService');
 const { getStorageAdapter } = require('../services/storage');
+const { isStrongPassword, PASSWORD_POLICY_MESSAGE } = require('../utils/passwordPolicy');
 
 /**
  * Get dashboard statistics
@@ -197,7 +198,7 @@ const suspendUser = async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    if (user.role === 'admin') {
+    if (user.role === 'admin' || user.role === 'super_admin') {
       return res.status(403).json({ error: 'Cannot suspend admin accounts' });
     }
 
@@ -286,8 +287,12 @@ const permanentlyDeleteUser = async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    if (user.role === 'admin' && user.id === req.user.id) {
+    if ((user.role === 'admin' || user.role === 'super_admin') && user.id === req.user.id) {
       return res.status(403).json({ error: 'Cannot delete your own admin account' });
+    }
+
+    if ((user.role === 'admin' || user.role === 'super_admin') && req.user.role !== 'super_admin') {
+      return res.status(403).json({ error: 'Only super admins can delete admin accounts' });
     }
 
     const userName = user.name;
@@ -301,6 +306,49 @@ const permanentlyDeleteUser = async (req, res) => {
   } catch (error) {
     console.error('Permanently delete user error:', error);
     res.status(500).json({ error: 'Failed to delete user' });
+  }
+};
+
+/**
+ * Create a new admin account (super_admin only)
+ * POST /admin/users/create-admin
+ */
+const createAdmin = async (req, res) => {
+  try {
+    const { name, email, password } = req.body;
+
+    if (!name || !email || !password) {
+      return res.status(400).json({ error: 'Name, email, and password are required' });
+    }
+
+    if (!isStrongPassword(password)) {
+      return res.status(400).json({ error: PASSWORD_POLICY_MESSAGE });
+    }
+
+    // Check for existing user with same email
+    const existingUser = await User.findOne({ where: { email: email.trim().toLowerCase() }, paranoid: false });
+    if (existingUser) {
+      return res.status(409).json({ error: 'A user with this email already exists' });
+    }
+
+    const salt = await bcrypt.genSalt(10);
+    const password_hash = await bcrypt.hash(password, salt);
+
+    const newAdmin = await User.create({
+      name: name.trim(),
+      email: email.trim().toLowerCase(),
+      password_hash,
+      role: 'admin',
+      account_status: 'active'
+    });
+
+    res.status(201).json({
+      message: 'Admin account created successfully',
+      user: newAdmin.toSafeObject()
+    });
+  } catch (error) {
+    console.error('Create admin error:', error);
+    res.status(500).json({ error: 'Failed to create admin account' });
   }
 };
 
@@ -1126,6 +1174,7 @@ module.exports = {
   suspendUser,
   unsuspendUser,
   permanentlyDeleteUser,
+  createAdmin,
   approveUser,
   getAllProjects,
   getProjectById,

@@ -31,9 +31,9 @@ exports.register = async (req, res) => {
     }
 
     // Validate role
-    const validRoles = ['researcher', 'nonprofit', 'admin'];
+    const validRoles = ['researcher', 'nonprofit', 'admin', 'super_admin'];
     if (role && !validRoles.includes(role)) {
-      return res.status(400).json({ error: "invalid role. Must be one of: researcher, nonprofit, admin" });
+      return res.status(400).json({ error: "invalid role. Must be one of: researcher, nonprofit, admin, super_admin" });
     }
 
     // Validate nonprofit-specific requirements
@@ -176,14 +176,42 @@ exports.login = async (req, res) => {
       id: found.id,
       name: found.name,
       email: found.email,
+      twoFA: found.mfa_enabled || false,
       role: found.role,
       org_id: found.org_id || null,
       created_at: found.created_at,
     };
 
+    // If 2FA is enabled, send a code and return a temp token
+    if (found.mfa_enabled) {
+      const code = String(crypto.randomInt(100000, 999999));
+      const code_hash = await bcrypt.hash(code, 10);
+      const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+
+      await TwoFactorCode.create({
+        user_id: found.id,
+        purpose: "login",
+        code_hash,
+        expires_at: expiresAt,
+        attempts: 0,
+        consumed_at: null
+      });
+
+      await emailService.sendTwoFactorCodeEmail(found.email, found.name, code, "login");
+
+      const secret = process.env.JWT_SECRET;
+      const tempToken = jwt.sign(
+        { userId: found.id, email: found.email, pending2fa: true },
+        secret,
+        { expiresIn: "10m" }
+      );
+
+      return res.json({ requires2FA: true, tempToken });
+    }
+
     const secret = process.env.JWT_SECRET;
     const token = jwt.sign(
-      { userId: user.id, role: user.role, email: user.email },
+      { userId: user.id, role: user.role, email: user.email, twoFA: user.twoFA },
       secret,
       { expiresIn: "7d" }
     );
@@ -489,6 +517,244 @@ exports.verifyEnable2FACode = async (req, res) => {
   } catch (err) {
     console.error("verifyEnable2FACode error", err);
     return res.status(500).json({ error: "Verification failed." });
+  }
+};
+
+// Send a code to disable 2FA
+exports.sendDisable2FACode = async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    const user = await User.findByPk(userId);
+    if (!user) return res.status(404).json({ error: "User not found" });
+    if (!user.mfa_enabled) {
+      return res.status(400).json({ error: "2FA is not enabled" });
+    }
+
+    const code = String(crypto.randomInt(100000, 999999));
+    const code_hash = await bcrypt.hash(code, 10);
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+
+    await TwoFactorCode.create({
+      user_id: userId,
+      purpose: "disable",
+      code_hash,
+      expires_at: expiresAt,
+      attempts: 0,
+      consumed_at: null
+    });
+
+    await emailService.sendTwoFactorCodeEmail(user.email, user.name, code, "disable");
+
+    return res.json({ message: "Disable code sent to your email." });
+  } catch (err) {
+    console.error("sendDisable2FACode error", err);
+    return res.status(500).json({ error: "Failed to send disable code" });
+  }
+};
+
+// Verify code to disable 2FA
+exports.verifyDisable2FACode = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { code } = req.body;
+
+    if (!code) {
+      return res.status(400).json({ error: "Code is required" });
+    }
+
+    const record = await TwoFactorCode.findOne({
+      where: {
+        user_id: userId,
+        purpose: "disable",
+        consumed_at: null
+      },
+      order: [["created_at", "DESC"]]
+    });
+
+    if (!record) {
+      return res.status(400).json({ error: "No active disable code found." });
+    }
+
+    if (record.expires_at < new Date()) {
+      return res.status(400).json({ error: "Code expired." });
+    }
+
+    if (record.attempts >= 5) {
+      return res.status(429).json({ error: "Too many attempts." });
+    }
+
+    const valid = await bcrypt.compare(code, record.code_hash);
+
+    if (!valid) {
+      record.attempts += 1;
+      await record.save();
+      return res.status(400).json({ error: "Invalid code." });
+    }
+
+    record.consumed_at = new Date();
+    await record.save();
+
+    await User.update(
+      { mfa_enabled: false },
+      { where: { id: userId } }
+    );
+
+    return res.json({ message: "Two-factor authentication disabled." });
+
+  } catch (err) {
+    console.error("verifyDisable2FACode error", err);
+    return res.status(500).json({ error: "Verification failed." });
+  }
+};
+
+// Verify 2FA code during login
+exports.verifyLogin2FACode = async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
+    const tempToken = authHeader.split(' ')[1];
+    const secret = process.env.JWT_SECRET;
+    let decoded;
+    try {
+      decoded = jwt.verify(tempToken, secret);
+    } catch (jwtErr) {
+      return res.status(401).json({ error: "Invalid or expired token" });
+    }
+
+    if (!decoded.pending2fa) {
+      return res.status(401).json({ error: "Invalid token type" });
+    }
+
+    const { code } = req.body;
+    if (!code) {
+      return res.status(400).json({ error: "Code is required" });
+    }
+
+    const record = await TwoFactorCode.findOne({
+      where: {
+        user_id: decoded.userId,
+        purpose: "login",
+        consumed_at: null
+      },
+      order: [["created_at", "DESC"]]
+    });
+
+    if (!record) {
+      return res.status(400).json({ error: "No active login code found." });
+    }
+
+    if (record.expires_at < new Date()) {
+      return res.status(400).json({ error: "Code expired." });
+    }
+
+    if (record.attempts >= 5) {
+      return res.status(429).json({ error: "Too many attempts." });
+    }
+
+    const valid = await bcrypt.compare(code, record.code_hash);
+
+    if (!valid) {
+      record.attempts += 1;
+      await record.save();
+      return res.status(400).json({ error: "Invalid code." });
+    }
+
+    record.consumed_at = new Date();
+    await record.save();
+
+    // Build user object and issue real session token
+    const found = await User.findByPk(decoded.userId);
+    if (!found) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    const user = {
+      id: found.id,
+      name: found.name,
+      email: found.email,
+      twoFA: found.mfa_enabled || false,
+      role: found.role,
+      org_id: found.org_id || null,
+      created_at: found.created_at,
+    };
+
+    const token = jwt.sign(
+      { userId: user.id, role: user.role, email: user.email, twoFA: user.twoFA },
+      secret,
+      { expiresIn: "7d" }
+    );
+
+    return res.json({ user, token });
+
+  } catch (err) {
+    console.error("verifyLogin2FACode error", err);
+    return res.status(500).json({ error: "Verification failed." });
+  }
+};
+
+// Resend 2FA code during login (invalidates previous codes)
+exports.resendLogin2FACode = async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
+    const tempToken = authHeader.split(' ')[1];
+    const secret = process.env.JWT_SECRET;
+    let decoded;
+    try {
+      decoded = jwt.verify(tempToken, secret);
+    } catch (jwtErr) {
+      return res.status(401).json({ error: "Invalid or expired token" });
+    }
+
+    if (!decoded.pending2fa) {
+      return res.status(401).json({ error: "Invalid token type" });
+    }
+
+    const user = await User.findByPk(decoded.userId);
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    // Invalidate all unconsumed login codes for this user
+    await TwoFactorCode.update(
+      { consumed_at: new Date() },
+      {
+        where: {
+          user_id: decoded.userId,
+          purpose: "login",
+          consumed_at: null
+        }
+      }
+    );
+
+    // Generate and send new code
+    const code = String(crypto.randomInt(100000, 999999));
+    const code_hash = await bcrypt.hash(code, 10);
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+
+    await TwoFactorCode.create({
+      user_id: decoded.userId,
+      purpose: "login",
+      code_hash,
+      expires_at: expiresAt,
+      attempts: 0,
+      consumed_at: null
+    });
+
+    await emailService.sendTwoFactorCodeEmail(user.email, user.name, code, "login");
+
+    return res.json({ message: "New code sent to your email." });
+
+  } catch (err) {
+    console.error("resendLogin2FACode error", err);
+    return res.status(500).json({ error: "Failed to resend code" });
   }
 };
 

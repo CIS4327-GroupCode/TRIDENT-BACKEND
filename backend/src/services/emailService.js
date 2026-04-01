@@ -310,7 +310,11 @@ const sendNotificationEmail = async (email, name, { type, title, message, link }
 */
 const sendTwoFactorCodeEmail = async (email, name, code, purpose = "enable") => {
   const subject =
-    purpose === "login" ? "Your TRIDENT login code" : "Your TRIDENT 2FA setup code";
+    purpose === "login"
+      ? "Your TRIDENT login code"
+      : purpose === "disable"
+        ? "Your TRIDENT 2FA disable code"
+        : "Your TRIDENT 2FA setup code";
 
   const html = `
     <h2>${subject}</h2>

@@ -78,14 +78,25 @@ Notification.init(
           // Admin events
           'account_status_changed',
           'admin_message',
-          // Future: Collaboration events
+          // Collaboration events
           'application_received',
           'application_accepted',
           'application_rejected',
-          // Future: Matching events
+          'invitation',
+          // Agreement/Contract events
+          'agreement_created',
+          'agreement_pending_signature',
+          'agreement_signed',
+          'agreement_activated',
+          'agreement_terminated',
+          // Matching events
           'new_match_available',
-          // Future: Rating events
+          // Rating events
           'rating_received',
+          'rating_moderated',
+          // Account & security events
+          'user_suspended',
+          'security',
           // System events
           'system_announcement',
           'account_verified'

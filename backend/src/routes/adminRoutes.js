@@ -3,7 +3,7 @@ const router = express.Router();
 const adminController = require('../controllers/adminController');
 const ratingController = require('../controllers/ratingController');
 const agreementController = require('../controllers/agreementController');
-const { authenticate, requireAdmin } = require('../middleware/auth');
+const { authenticate, requireAdmin, requireSuperAdmin } = require('../middleware/auth');
 
 // All routes require authentication and admin role
 router.use(authenticate);
@@ -11,6 +11,9 @@ router.use(requireAdmin);
 
 // Dashboard
 router.get('/dashboard/stats', adminController.getDashboardStats);
+
+// Admin Creation (super_admin only)
+router.post('/users/create-admin', requireSuperAdmin, adminController.createAdmin);
 
 // User Management
 router.get('/users', adminController.getAllUsers);

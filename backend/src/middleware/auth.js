@@ -18,6 +18,11 @@ const authenticate = async (req, res, next) => {
     // Verify token
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
+    // Reject temporary 2FA tokens from accessing protected routes
+    if (decoded.pending2fa) {
+      return res.status(401).json({ error: '2FA verification required' });
+    }
+
     // Check if user exists and is not deleted
     const user = await User.findByPk(decoded.userId, {
       attributes: ['id', 'name', 'email', 'role', 'account_status', 'deleted_at', 'org_id'],
@@ -56,11 +61,21 @@ const authenticate = async (req, res, next) => {
 };
 
 /**
- * Middleware to check if user has admin role
+ * Middleware to check if user has admin role (admin or super_admin)
  */
 const requireAdmin = (req, res, next) => {
-  if (req.user.role !== 'admin') {
+  if (req.user.role !== 'admin' && req.user.role !== 'super_admin') {
     return res.status(403).json({ error: 'Admin access required' });
+  }
+  next();
+};
+
+/**
+ * Middleware to check if user has super_admin role
+ */
+const requireSuperAdmin = (req, res, next) => {
+  if (req.user.role !== 'super_admin') {
+    return res.status(403).json({ error: 'Super admin access required' });
   }
   next();
 };
@@ -88,6 +103,7 @@ const requireResearcher = (req, res, next) => {
 module.exports = {
   authenticate,
   requireAdmin,
+  requireSuperAdmin,
   requireNonprofit,
   requireResearcher
 };

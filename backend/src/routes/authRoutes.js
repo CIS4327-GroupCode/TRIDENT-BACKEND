@@ -6,7 +6,7 @@ const { createRateLimiter } = require('../middleware/rateLimit');
 
 const authLimiter = createRateLimiter({
 	windowMs: 15 * 60 * 1000,
-	maxRequests: 10,
+	maxRequests: 15,
 	keySelector: (req) => `${req.ip}:${String(req.body?.email || '').trim().toLowerCase()}`,
 });
 
@@ -44,6 +44,14 @@ router.post('/reset-password', authLimiter, authController.resetPassword);
 // Enable 2 Factor authentication route
 router.post('/2fa/send-enable', authenticate, twoFactorSendLimiter, authController.sendEnable2FACode);
 router.post('/2fa/verify-enable', authenticate, twoFactorVerifyLimiter, authController.verifyEnable2FACode);
+
+// Disable 2 Factor authentication route
+router.post('/2fa/send-disable', authenticate, twoFactorSendLimiter, authController.sendDisable2FACode);
+router.post('/2fa/verify-disable', authenticate, twoFactorVerifyLimiter, authController.verifyDisable2FACode);
+
+// 2FA login verification routes (no authenticate — uses temp token manually)
+router.post('/2fa/verify-login', twoFactorVerifyLimiter, authController.verifyLogin2FACode);
+router.post('/2fa/resend-login', twoFactorSendLimiter, authController.resendLogin2FACode);
 
 
 module.exports = router;

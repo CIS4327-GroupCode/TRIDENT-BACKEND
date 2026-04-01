@@ -25,9 +25,17 @@ function isValidWebsite(urlValue) {
  */
 const getOrganization = async (req, res) => {
   try {
-    const org = await Organization.findOne({
+    // Try user_id first (owner link), then fall back to org_id on user
+    let org = await Organization.findOne({
       where: { user_id: req.user.id },
     });
+
+    if (!org) {
+      const user = await User.findByPk(req.user.id, { attributes: ['org_id'] });
+      if (user?.org_id) {
+        org = await Organization.findByPk(user.org_id);
+      }
+    }
 
     // If no organization exists yet, return empty object
     if (!org) {
