@@ -4,9 +4,70 @@ const {
   ProjectReview,
   User,
   SavedProject,
+  Rating,
 } = require('../database/models');
 const { Op } = require('sequelize');
 const notificationService = require('../services/notificationService');
+
+const buildRatingSummary = (ratings = []) => {
+  if (!ratings.length) {
+    return {
+      count: 0,
+      averages: {
+        quality: 0,
+        communication: 0,
+        timeliness: 0,
+        overall: 0,
+      },
+    };
+  }
+
+  const sums = { quality: 0, communication: 0, timeliness: 0, overall: 0 };
+  let scoredCount = 0;
+
+  for (const rating of ratings) {
+    const scores = rating?.scores;
+    if (!scores || typeof scores !== 'object') {
+      continue;
+    }
+    if (
+      !Number.isFinite(scores.quality)
+      || !Number.isFinite(scores.communication)
+      || !Number.isFinite(scores.timeliness)
+      || !Number.isFinite(scores.overall)
+    ) {
+      continue;
+    }
+
+    scoredCount += 1;
+    sums.quality += Number(scores.quality);
+    sums.communication += Number(scores.communication);
+    sums.timeliness += Number(scores.timeliness);
+    sums.overall += Number(scores.overall);
+  }
+
+  if (!scoredCount) {
+    return {
+      count: ratings.length,
+      averages: {
+        quality: 0,
+        communication: 0,
+        timeliness: 0,
+        overall: 0,
+      },
+    };
+  }
+
+  return {
+    count: ratings.length,
+    averages: {
+      quality: Number((sums.quality / scoredCount).toFixed(2)),
+      communication: Number((sums.communication / scoredCount).toFixed(2)),
+      timeliness: Number((sums.timeliness / scoredCount).toFixed(2)),
+      overall: Number((sums.overall / scoredCount).toFixed(2)),
+    },
+  };
+};
 
 /**
  * Browse and search public projects (for researchers)
@@ -98,8 +159,49 @@ const browseProjects = async (req, res) => {
       offset: offset
     });
 
+    const projectIds = rows.map((project) => project.project_id);
+    let ratingSummaryByProject = new Map();
+
+    if (projectIds.length > 0) {
+      const ratingRows = await Rating.findAll({
+        where: {
+          project_id: { [Op.in]: projectIds },
+          status: 'active',
+        },
+        attributes: ['project_id', 'scores'],
+      });
+
+      const grouped = new Map();
+      for (const rating of ratingRows) {
+        const projectRatings = grouped.get(rating.project_id) || [];
+        projectRatings.push(rating);
+        grouped.set(rating.project_id, projectRatings);
+      }
+
+      ratingSummaryByProject = new Map(
+        Array.from(grouped.entries()).map(([id, ratings]) => [id, buildRatingSummary(ratings)])
+      );
+    }
+
+    const projects = rows.map((project) => {
+      const summary = ratingSummaryByProject.get(project.project_id) || {
+        count: 0,
+        averages: {
+          quality: 0,
+          communication: 0,
+          timeliness: 0,
+          overall: 0,
+        },
+      };
+
+      return {
+        ...project.toJSON(),
+        rating_summary: summary,
+      };
+    });
+
     return res.status(200).json({
-      projects: rows,
+      projects,
       pagination: {
         total: count,
         page: parseInt(page),
@@ -319,7 +421,41 @@ const getPublicProject = async (req, res) => {
       return res.status(404).json({ error: 'Project not found or not available' });
     }
 
-    return res.status(200).json({ project });
+    const [ratings, recentReviews] = await Promise.all([
+      Rating.findAll({
+        where: {
+          project_id: project.project_id,
+          status: 'active',
+        },
+        attributes: ['scores'],
+      }),
+      Rating.findAll({
+        where: {
+          project_id: project.project_id,
+          status: 'active',
+        },
+        include: [
+          {
+            model: User,
+            as: 'reviewer',
+            attributes: ['id', 'name', 'role'],
+          },
+        ],
+        attributes: ['id', 'comments', 'scores', 'created_at'],
+        order: [['created_at', 'DESC']],
+        limit: 5,
+      }),
+    ]);
+
+    const ratingSummary = buildRatingSummary(ratings);
+
+    const payload = {
+      ...project.toJSON(),
+      rating_summary: ratingSummary,
+      recent_reviews: recentReviews,
+    };
+
+    return res.status(200).json({ project: payload });
   } catch (error) {
     console.error('Get public project error:', error);
     return res.status(500).json({ error: 'Internal server error' });
@@ -365,6 +501,7 @@ const createProject = async (req, res) => {
       methods_required,
       timeline,
       budget_min,
+      budget_max,
       data_sensitivity,
       status,
     } = req.body;
@@ -386,6 +523,41 @@ const createProject = async (req, res) => {
       }
     }
 
+    if (budget_max !== undefined && budget_max !== null) {
+      const budgetMaxNum = parseFloat(budget_max);
+      if (isNaN(budgetMaxNum) || budgetMaxNum < 0) {
+        return res
+          .status(400)
+          .json({ error: 'Budget max must be a non-negative number' });
+      }
+    }
+
+    if (
+      budget_min !== undefined
+      && budget_min !== null
+      && budget_max !== undefined
+      && budget_max !== null
+      && parseFloat(budget_max) < parseFloat(budget_min)
+    ) {
+      return res.status(400).json({
+        error: 'Budget max must be greater than or equal to budget min',
+      });
+    }
+
+    const sensitivityAlias = {
+      low: 'Low',
+      medium: 'Medium',
+      high: 'High',
+    };
+    const normalizedSensitivity = data_sensitivity
+      ? sensitivityAlias[String(data_sensitivity).trim().toLowerCase()]
+      : null;
+    if (data_sensitivity && !normalizedSensitivity) {
+      return res.status(400).json({
+        error: 'data_sensitivity must be one of: Low, Medium, High',
+      });
+    }
+
     // Validate status if provided
     const validStatuses = ['draft', 'open', 'in_progress', 'completed', 'cancelled'];
     if (status && !validStatuses.includes(status)) {
@@ -402,7 +574,8 @@ const createProject = async (req, res) => {
       methods_required: methods_required ? methods_required.trim() : null,
       timeline: timeline ? timeline.trim() : null,
       budget_min: budget_min || null,
-      data_sensitivity: data_sensitivity ? data_sensitivity.trim() : null,
+      budget_max: budget_max || null,
+      data_sensitivity: normalizedSensitivity,
       status: status || 'draft',
       org_id: organization.id, // <- key line
     });
@@ -582,6 +755,7 @@ const updateProject = async (req, res) => {
       'methods_required',
       'timeline',
       'budget_min',
+      'budget_max',
       'data_sensitivity',
       'status',
     ];
@@ -614,6 +788,44 @@ const updateProject = async (req, res) => {
           .status(400)
           .json({ error: 'Budget must be a non-negative number' });
       }
+    }
+
+    if (updates.budget_max !== undefined && updates.budget_max !== null) {
+      const budgetMaxNum = parseFloat(updates.budget_max);
+      if (isNaN(budgetMaxNum) || budgetMaxNum < 0) {
+        return res
+          .status(400)
+          .json({ error: 'Budget max must be a non-negative number' });
+      }
+    }
+
+    const nextBudgetMin = updates.budget_min !== undefined ? updates.budget_min : project.budget_min;
+    const nextBudgetMax = updates.budget_max !== undefined ? updates.budget_max : project.budget_max;
+    if (
+      nextBudgetMin !== undefined
+      && nextBudgetMin !== null
+      && nextBudgetMax !== undefined
+      && nextBudgetMax !== null
+      && parseFloat(nextBudgetMax) < parseFloat(nextBudgetMin)
+    ) {
+      return res.status(400).json({
+        error: 'Budget max must be greater than or equal to budget min',
+      });
+    }
+
+    if (updates.data_sensitivity !== undefined && updates.data_sensitivity !== null) {
+      const sensitivityAlias = {
+        low: 'Low',
+        medium: 'Medium',
+        high: 'High',
+      };
+      const normalizedSensitivity = sensitivityAlias[String(updates.data_sensitivity).trim().toLowerCase()];
+      if (!normalizedSensitivity) {
+        return res.status(400).json({
+          error: 'data_sensitivity must be one of: Low, Medium, High',
+        });
+      }
+      updates.data_sensitivity = normalizedSensitivity;
     }
 
     // Validate status if being updated

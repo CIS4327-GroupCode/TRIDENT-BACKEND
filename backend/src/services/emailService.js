@@ -225,8 +225,7 @@ const sendPasswordResetEmail = async (email, name, resetToken) => {
  * @param {Object} notification - Notification object with type, title, message, link
  * @returns {Promise<Object>} Nodemailer result
  */
-const sendNotificationEmail = async (email, name, notification) => {
-  const { type, title, message, link } = notification;
+const sendNotificationEmail = async (email, name, { type, title, message, link }) => {
   const actionLink = link ? `${process.env.APP_URL || 'http://localhost:3000'}${link}` : null;
   
   const html = `
@@ -311,7 +310,11 @@ const sendNotificationEmail = async (email, name, notification) => {
 */
 const sendTwoFactorCodeEmail = async (email, name, code, purpose = "enable") => {
   const subject =
-    purpose === "login" ? "Your TRIDENT login code" : "Your TRIDENT 2FA setup code";
+    purpose === "login"
+      ? "Your TRIDENT login code"
+      : purpose === "disable"
+        ? "Your TRIDENT 2FA disable code"
+        : "Your TRIDENT 2FA setup code";
 
   const html = `
     <h2>${subject}</h2>
@@ -462,6 +465,7 @@ const testConnection = async () => {
 module.exports = {
   sendVerificationEmail,
   sendPasswordResetEmail,
+  sendTwoFactorCodeEmail,
   sendNotificationEmail,
   sendWeeklyDigest,
   testConnection,

@@ -1,7 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const adminController = require('../controllers/adminController');
-const { authenticate, requireAdmin } = require('../middleware/auth');
+const ratingController = require('../controllers/ratingController');
+const agreementController = require('../controllers/agreementController');
+const { authenticate, requireAdmin, requireSuperAdmin } = require('../middleware/auth');
 
 // All routes require authentication and admin role
 router.use(authenticate);
@@ -9,6 +11,9 @@ router.use(requireAdmin);
 
 // Dashboard
 router.get('/dashboard/stats', adminController.getDashboardStats);
+
+// Admin Creation (super_admin only)
+router.post('/users/create-admin', requireSuperAdmin, adminController.createAdmin);
 
 // User Management
 router.get('/users', adminController.getAllUsers);
@@ -38,5 +43,19 @@ router.delete('/milestones/:id', adminController.deleteMilestone);
 // Organization Management
 router.get('/organizations', adminController.getAllOrganizations);
 router.delete('/organizations/:id', adminController.deleteOrganization);
+
+// Attachment Governance (UC13)
+router.get('/attachments', adminController.getAllAttachments);
+router.get('/attachments/stats', adminController.getAttachmentStats);
+router.delete('/attachments/:id', adminController.forceDeleteAttachment);
+
+// Rating Moderation (UC5)
+router.get('/ratings', ratingController.getAdminRatings);
+router.get('/ratings/stats', ratingController.getAdminRatingStats);
+router.put('/ratings/:ratingId/moderate', ratingController.moderateRating);
+
+// Agreement Governance (UC11)
+router.get('/agreements', agreementController.adminListAgreements);
+router.get('/agreements/stats', agreementController.adminAgreementStats);
 
 module.exports = router;

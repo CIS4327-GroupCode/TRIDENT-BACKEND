@@ -22,11 +22,11 @@ Rating.init(
       field: 'from_party'
     },
     scores: {
-      type: DataTypes.STRING(255),
+      type: DataTypes.JSONB,
       allowNull: true
     },
     comments: {
-      type: DataTypes.STRING(255),
+      type: DataTypes.TEXT,
       allowNull: true
     },
     project_id: {
@@ -39,16 +39,61 @@ Rating.init(
       field: 'project_id'
     },
     rated_by_user_id: {
-      type: DataTypes.STRING(255),
+      type: DataTypes.INTEGER,
       allowNull: true,
+      references: {
+        model: '_user',
+        key: 'id'
+      },
+      onUpdate: 'CASCADE',
+      onDelete: 'SET NULL',
       field: 'rated_by_user_id'
+    },
+    rated_user_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      references: {
+        model: '_user',
+        key: 'id'
+      },
+      onUpdate: 'CASCADE',
+      onDelete: 'SET NULL',
+      field: 'rated_user_id'
+    },
+    status: {
+      type: DataTypes.ENUM('active', 'flagged', 'removed'),
+      allowNull: false,
+      defaultValue: 'active'
+    },
+    moderation_reason: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+      field: 'moderation_reason'
+    },
+    moderated_by: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      references: {
+        model: '_user',
+        key: 'id'
+      },
+      onUpdate: 'CASCADE',
+      onDelete: 'SET NULL',
+      field: 'moderated_by'
+    },
+    moderated_at: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      field: 'moderated_at'
     }
   },
   {
     sequelize,
     modelName: 'Rating',
     tableName: 'ratings',
-    timestamps: false,
+    timestamps: true,
+    createdAt: 'created_at',
+    updatedAt: 'updated_at',
     underscored: true
   }
 );

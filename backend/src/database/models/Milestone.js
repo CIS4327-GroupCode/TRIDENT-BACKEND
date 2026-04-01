@@ -62,6 +62,16 @@ Milestone.init(
       type: DataTypes.TEXT,
       allowNull: true
     },
+    depends_on: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      references: {
+        model: 'milestones',
+        key: 'id'
+      },
+      onDelete: 'SET NULL',
+      field: 'depends_on'
+    },
     due_date: {
       type: DataTypes.DATEONLY,
       allowNull: true,

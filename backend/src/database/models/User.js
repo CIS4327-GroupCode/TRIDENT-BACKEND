@@ -50,7 +50,7 @@ User.init(
       }
     },
     role: {
-      type: DataTypes.ENUM('researcher', 'nonprofit', 'admin'),
+      type: DataTypes.ENUM('researcher', 'nonprofit', 'admin', 'super_admin'),
       allowNull: false,
       defaultValue: 'researcher'
     },

@@ -1,4 +1,14 @@
 const { ResearcherProfile, AcademicHistory, Certification, Application, Project, Organization, User } = require('../database/models');
+const { logAudit, AUDIT_ACTIONS } = require('../utils/auditLogger');
+
+function trimStringFields(input = {}) {
+  const output = {};
+  Object.keys(input).forEach((key) => {
+    const value = input[key];
+    output[key] = typeof value === 'string' ? value.trim() : value;
+  });
+  return output;
+}
 
 /**
  * Parse comma-separated string into array
@@ -94,9 +104,10 @@ const updateResearcherProfile = async (req, res) => {
 
     // Filter only allowed fields from request body
     const updates = {};
-    Object.keys(req.body).forEach(key => {
-      if (allowedFields.includes(key) && req.body[key] !== undefined) {
-        updates[key] = req.body[key];
+    const sanitizedBody = trimStringFields(req.body || {});
+    Object.keys(sanitizedBody).forEach(key => {
+      if (allowedFields.includes(key) && sanitizedBody[key] !== undefined) {
+        updates[key] = sanitizedBody[key];
       }
     });
 
@@ -123,6 +134,14 @@ const updateResearcherProfile = async (req, res) => {
 
     // Update profile
     await profile.update(updates);
+
+    void logAudit({
+      actorId: userId,
+      action: AUDIT_ACTIONS.RESEARCHER_PROFILE_UPDATE,
+      entityType: 'RESEARCHER_PROFILE',
+      entityId: profile.id,
+      metadata: { updatedFields: Object.keys(updates) },
+    });
 
     // Calculate and include completeness
     const completeness = computeProfileCompleteness(profile.toJSON());
@@ -165,7 +184,7 @@ const getAcademicHistory = async (req, res) => {
 const createAcademicHistory = async (req, res) => {
   try {
     const userId = req.user.id;
-    const { degree, field, institution, year } = req.body;
+    const { degree, field, institution, year } = trimStringFields(req.body || {});
 
     if (!degree || !institution) {
       return res.status(400).json({ error: 'Degree and institution are required' });
@@ -177,6 +196,14 @@ const createAcademicHistory = async (req, res) => {
       field,
       institution,
       year
+    });
+
+    void logAudit({
+      actorId: userId,
+      action: AUDIT_ACTIONS.ACADEMIC_HISTORY_CREATE,
+      entityType: 'ACADEMIC_HISTORY',
+      entityId: academic.id,
+      metadata: { degree, institution },
     });
 
     return res.status(201).json({ 
@@ -197,7 +224,7 @@ const updateAcademicHistory = async (req, res) => {
   try {
     const userId = req.user.id;
     const { id } = req.params;
-    const { degree, field, institution, year } = req.body;
+    const { degree, field, institution, year } = trimStringFields(req.body || {});
 
     const academic = await AcademicHistory.findOne({
       where: { id, user_id: userId }
@@ -218,6 +245,14 @@ const updateAcademicHistory = async (req, res) => {
     }
 
     await academic.update(updates);
+
+    void logAudit({
+      actorId: userId,
+      action: AUDIT_ACTIONS.ACADEMIC_HISTORY_UPDATE,
+      entityType: 'ACADEMIC_HISTORY',
+      entityId: academic.id,
+      metadata: { updatedFields: Object.keys(updates) },
+    });
 
     return res.status(200).json({ 
       message: 'Academic entry updated successfully',
@@ -247,6 +282,14 @@ const deleteAcademicHistory = async (req, res) => {
     }
 
     await academic.destroy();
+
+    void logAudit({
+      actorId: userId,
+      action: AUDIT_ACTIONS.ACADEMIC_HISTORY_DELETE,
+      entityType: 'ACADEMIC_HISTORY',
+      entityId: Number(id),
+      metadata: {},
+    });
 
     return res.status(200).json({ message: 'Academic entry deleted successfully' });
   } catch (error) {
@@ -282,7 +325,7 @@ const getCertifications = async (req, res) => {
 const createCertification = async (req, res) => {
   try {
     const userId = req.user.id;
-    const { name, issuer, year, credential_id } = req.body;
+    const { name, issuer, year, credential_id } = trimStringFields(req.body || {});
 
     if (!name || !issuer) {
       return res.status(400).json({ error: 'Name and issuer are required' });
@@ -294,6 +337,14 @@ const createCertification = async (req, res) => {
       issuer,
       year,
       credential_id
+    });
+
+    void logAudit({
+      actorId: userId,
+      action: AUDIT_ACTIONS.CERTIFICATION_CREATE,
+      entityType: 'CERTIFICATION',
+      entityId: certification.id,
+      metadata: { name, issuer },
     });
 
     return res.status(201).json({ 
@@ -314,7 +365,7 @@ const updateCertification = async (req, res) => {
   try {
     const userId = req.user.id;
     const { id } = req.params;
-    const { name, issuer, year, credential_id } = req.body;
+    const { name, issuer, year, credential_id } = trimStringFields(req.body || {});
 
     const certification = await Certification.findOne({
       where: { id, user_id: userId }
@@ -335,6 +386,14 @@ const updateCertification = async (req, res) => {
     }
 
     await certification.update(updates);
+
+    void logAudit({
+      actorId: userId,
+      action: AUDIT_ACTIONS.CERTIFICATION_UPDATE,
+      entityType: 'CERTIFICATION',
+      entityId: certification.id,
+      metadata: { updatedFields: Object.keys(updates) },
+    });
 
     return res.status(200).json({ 
       message: 'Certification updated successfully',
@@ -365,6 +424,14 @@ const deleteCertification = async (req, res) => {
 
     await certification.destroy();
 
+    void logAudit({
+      actorId: userId,
+      action: AUDIT_ACTIONS.CERTIFICATION_DELETE,
+      entityType: 'CERTIFICATION',
+      entityId: Number(id),
+      metadata: {},
+    });
+
     return res.status(200).json({ message: 'Certification deleted successfully' });
   } catch (error) {
     console.error('Delete certification error:', error);
@@ -389,10 +456,18 @@ const getResearcherProjects = async (req, res) => {
       return res.status(404).json({ error: 'Researcher profile not found' });
     }
 
-    // Get applications/agreements for this researcher
+    // Get accepted applications with linked projects so rating actions can use real project ids/statuses.
     const applications = await Application.findAll({
-      where: { researcher_id: researcherProfile.user_id },
+      where: {
+        researcher_id: researcherProfile.user_id,
+        status: 'accepted'
+      },
       include: [
+        {
+          model: Project,
+          as: 'project',
+          attributes: ['project_id', 'title', 'status', 'timeline', 'budget_min', 'budget_max']
+        },
         {
           model: Organization,
           as: 'organization',
@@ -403,19 +478,27 @@ const getResearcherProjects = async (req, res) => {
     });
 
     // Transform applications to project format
-    const projects = applications.map(app => ({
-      id: app.id,
-      type: app.type || 'Collaboration Agreement',
-      status: app.type === 'completed' ? 'completed' : 'in_progress',
-      organization: app.organization ? {
-        name: app.organization.name,
-        mission: app.organization.mission,
-        focus_tags: app.organization.focus_tags
-      } : null,
-      budget_info: app.budget_info,
-      value: app.value,
-      created_at: app.created_at
-    }));
+    const projects = applications.map((app) => {
+      const projectStatus = app.project?.status || null;
+      const normalizedStatus = projectStatus === 'completed' ? 'completed' : 'in_progress';
+
+      return {
+        id: app.id,
+        project_id: app.project?.project_id || app.project_id || null,
+        title: app.project?.title || app.type || 'Collaboration Agreement',
+        type: app.type || app.project?.title || 'Collaboration Agreement',
+        status: normalizedStatus,
+        organization: app.organization ? {
+          name: app.organization.name,
+          mission: app.organization.mission,
+          focus_tags: app.organization.focus_tags
+        } : null,
+        timeline: app.project?.timeline || null,
+        budget_info: app.budget_info,
+        value: app.value,
+        created_at: app.created_at
+      };
+    });
 
     // Separate current and completed projects
     const currentProjects = projects.filter(p => p.status === 'in_progress');

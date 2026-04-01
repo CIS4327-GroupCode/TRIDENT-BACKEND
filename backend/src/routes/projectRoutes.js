@@ -7,6 +7,14 @@ const { authenticate, requireNonprofit, requireResearcher } = require('../middle
 const milestoneRoutes = require('./milestoneRoutes');
 router.use('/:projectId/milestones', milestoneRoutes);
 
+// Mount attachment routes under /projects/:projectId/attachments
+const attachmentRoutes = require('./attachmentRoutes');
+router.use('/:projectId/attachments', attachmentRoutes);
+
+// Mount rating routes under /projects/:projectId/ratings
+const ratingRoutes = require('./ratingRoutes');
+router.use('/:projectId/ratings', ratingRoutes);
+
 /**
  * Public routes (no authentication required)
  */

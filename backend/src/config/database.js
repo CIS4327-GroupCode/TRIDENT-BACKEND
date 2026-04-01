@@ -28,6 +28,26 @@ module.exports = {
     },
   },
 
+  staging: {
+    url: DATABASE_URL,
+    dialect: 'postgres',
+    dialectModule: pg,
+    logging: false,
+    pool: {
+      ...poolConfig,
+      max: 2,
+    },
+    dialectOptions: {
+      // Keep staging close to production behavior while allowing light test concurrency.
+      ssl: {
+        require: true,
+        rejectUnauthorized: false,
+      },
+      connectTimeout: 10000,
+      keepAlive: false,
+    },
+  },
+
   production: {
     url: DATABASE_URL,
     dialect: 'postgres',

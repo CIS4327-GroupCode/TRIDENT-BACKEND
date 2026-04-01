@@ -3,11 +3,20 @@ const router = express.Router();
 const { encryptMessage, decryptMessage } = require("../utils/encryption");
 const sequelize = require("../database"); // your existing DB connection
 const notificationService = require("../services/notificationService");
+const { authenticate, requireAdmin } = require("../middleware/auth");
 
 // SEND MESSAGE (encrypt before storing)
-router.post("/send", async (req, res) => {
+router.post("/send", authenticate, async (req, res) => {
     try {
         const { thread_id, sender_id, recipient_id, body } = req.body;
+
+        if (!thread_id || !sender_id || !recipient_id || !body) {
+            return res.status(400).json({ error: "thread_id, sender_id, recipient_id, and body are required" });
+        }
+
+        if (Number(sender_id) !== Number(req.user.id)) {
+            return res.status(403).json({ error: "sender_id must match authenticated user" });
+        }
 
         const encryptedBody = encryptMessage(body, process.env.MSG_SECRET);
 
@@ -45,13 +54,17 @@ router.post("/send", async (req, res) => {
 });
 
 // GET MESSAGE THREAD (decrypt before sending)
-router.get("/thread/:threadId", async (req, res) => {
+router.get("/thread/:threadId", authenticate, async (req, res) => {
     try {
         const { threadId } = req.params;
 
         const [rows] = await sequelize.query(
-            `SELECT * FROM messages WHERE thread_id = $1 ORDER BY created_at ASC`,
-            { bind: [threadId] }
+                        `SELECT *
+                         FROM messages
+                         WHERE thread_id = $1
+                             AND (sender_id = $2 OR recipient_id = $2)
+                         ORDER BY created_at ASC`,
+                        { bind: [threadId, req.user.id] }
         );
 
         const key = process.env.MSG_SECRET;
@@ -72,22 +85,27 @@ router.get("/thread/:threadId", async (req, res) => {
     }
 });
 
-module.exports = router;
-
 // ADMIN MESSAGE RETRIEVAL
-router.get("/admin/thread/:threadId", async (req, res) => {
-  const { threadId } = req.params;
+router.get("/admin/thread/:threadId", authenticate, requireAdmin, async (req, res) => {
+    try {
+        const { threadId } = req.params;
 
-  const [rows] = await sequelize.query(
-      "SELECT * FROM messages WHERE thread_id = $1 ORDER BY created_at ASC",
-      { bind: [threadId] }
-  );
+        const [rows] = await sequelize.query(
+            "SELECT * FROM messages WHERE thread_id = $1 ORDER BY created_at ASC",
+            { bind: [threadId] }
+        );
 
-  const messages = rows.map(r => ({
-      ...r,
-      body: decryptMessage(r.body, process.env.MSG_SECRET)
-  }));
+        const messages = rows.map(r => ({
+            ...r,
+            body: decryptMessage(r.body, process.env.MSG_SECRET)
+        }));
 
-  res.json({ success: true, messages });
+        res.json({ success: true, messages });
+    } catch (err) {
+        console.error("ADMIN FETCH ERROR:", err);
+        res.status(500).json({ error: "Failed to load admin thread messages" });
+    }
 });
+
+module.exports = router;
 

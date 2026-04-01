@@ -1,6 +1,104 @@
-const { Milestone, Project, User } = require('../database/models');
+const { Milestone, Project, User, Application } = require('../database/models');
 const { Op } = require('sequelize');
 const notificationService = require('../services/notificationService');
+
+const VALID_STATUSES = ['pending', 'in_progress', 'completed', 'cancelled'];
+
+const loadProjectAndNonprofitUser = async (projectId, userId) => {
+  const project = await Project.findOne({ where: { project_id: projectId } });
+  if (!project) {
+    return { error: { status: 404, message: 'Project not found' } };
+  }
+
+  const user = await User.findByPk(userId);
+  if (!user || user.role !== 'nonprofit') {
+    return { error: { status: 403, message: 'Only nonprofit users can manage milestones' } };
+  }
+
+  if (project.org_id !== user.org_id) {
+    return {
+      error: {
+        status: 403,
+        message: "Access denied. You can only manage milestones for your organization's projects"
+      }
+    };
+  }
+
+  return { project, user };
+};
+
+const validateDependency = async ({ projectId, dependsOn, currentMilestoneId = null }) => {
+  if (dependsOn === undefined) {
+    return { ok: true };
+  }
+
+  if (dependsOn === null || dependsOn === '') {
+    return { ok: true, value: null };
+  }
+
+  const parsed = parseInt(dependsOn, 10);
+  if (Number.isNaN(parsed)) {
+    return { ok: false, status: 400, message: 'depends_on must be a valid milestone ID' };
+  }
+
+  if (currentMilestoneId && parsed === parseInt(currentMilestoneId, 10)) {
+    return { ok: false, status: 400, message: 'A milestone cannot depend on itself' };
+  }
+
+  const dependency = await Milestone.findOne({
+    where: { id: parsed, project_id: projectId }
+  });
+
+  if (!dependency) {
+    return {
+      ok: false,
+      status: 400,
+      message: 'depends_on must reference a milestone in the same project'
+    };
+  }
+
+  return { ok: true, value: parsed, dependency };
+};
+
+const validateDependencyStatusTransition = async ({ milestone, nextStatus, projectId }) => {
+  if (!['in_progress', 'completed'].includes(nextStatus)) {
+    return { ok: true };
+  }
+
+  const dependencyId = milestone.depends_on;
+  if (!dependencyId) {
+    return { ok: true };
+  }
+
+  const dependency = await Milestone.findOne({
+    where: {
+      id: dependencyId,
+      project_id: projectId
+    }
+  });
+
+  if (!dependency || dependency.status !== 'completed') {
+    return {
+      ok: false,
+      status: 400,
+      message: 'Dependency milestone must be completed before this status transition'
+    };
+  }
+
+  return { ok: true };
+};
+
+const getCollaboratingResearcherIds = async (project) => {
+  // TODO(UC8/UC9-F3): Scope researcher notifications by project when Application supports project_id.
+  const involvedResearchers = await Application.findAll({
+    where: {
+      org_id: project.org_id,
+      status: 'accepted'
+    }
+  });
+
+  return involvedResearchers.map((app) => app.researcher_id);
+};
 
 /**
  * Create a new milestone for a project
@@ -9,7 +107,7 @@ const notificationService = require('../services/notificationService');
 exports.createMilestone = async (req, res) => {
   try {
     const { projectId } = req.params;
-    const { name, description, due_date, status } = req.body;
+    const { name, description, due_date, status, depends_on } = req.body;
     const userId = req.user.id;
 
     // Validate required fields
@@ -17,39 +115,12 @@ exports.createMilestone = async (req, res) => {
       return res.status(400).json({ error: 'Milestone name is required' });
     }
 
-    // Verify project exists and user has access
-    const project = await Project.findOne({
-      where: { project_id: projectId }
-    });
-
-    if (!project) {
-      return res.status(404).json({ error: 'Project not found' });
+    const ownership = await loadProjectAndNonprofitUser(projectId, req.user.id);
+    if (ownership.error) {
+      const createMessage = ownership.error.message.replace('manage', 'create');
+      return res.status(ownership.error.status).json({ error: createMessage });
     }
-
-    // Check if user is the project owner (nonprofit organization)
-    // Check if user is the project owner
-    // Check if user is the project owner (nonprofit organization)
-    const user = await User.findByPk(req.user.id);
-
-    if (!user || user.role !== 'nonprofit') {
-      return res.status(403).json({
-        error: 'Only nonprofit users can create milestones',
-      });
-    }
-
-    // Debug so you can see what’s being compared (optional)
-    console.log('Milestone create auth:', {
-      userId: user.id,
-      userOrgId: user.org_id,
-      projectOrgId: project.org_id,
-    });
-
-    if (project.org_id !== user.org_id) {
-      return res.status(403).json({
-        error:
-          "Access denied. You can only create milestones for your organization's projects",
-      });
-    }
+    const { project } = ownership;
 
     // Validate due date is in the future (for new milestones)
     if (due_date) {
@@ -65,11 +136,29 @@ exports.createMilestone = async (req, res) => {
     }
 
     // Validate status if provided
-    const validStatuses = ['pending', 'in_progress', 'completed', 'cancelled'];
-    if (status && !validStatuses.includes(status)) {
+    if (status && !VALID_STATUSES.includes(status)) {
       return res.status(400).json({ 
-        error: `Invalid status. Must be one of: ${validStatuses.join(', ')}` 
+        error: `Invalid status. Must be one of: ${VALID_STATUSES.join(', ')}` 
       });
+    }
+
+    const dependencyValidation = await validateDependency({
+      projectId,
+      dependsOn: depends_on
+    });
+    if (!dependencyValidation.ok) {
+      return res.status(dependencyValidation.status).json({ error: dependencyValidation.message });
+    }
+
+    if (status) {
+      const transitionValidation = await validateDependencyStatusTransition({
+        milestone: { depends_on: dependencyValidation.value ?? null },
+        nextStatus: status,
+        projectId
+      });
+      if (!transitionValidation.ok) {
+        return res.status(transitionValidation.status).json({ error: transitionValidation.message });
+      }
     }
 
     // Create milestone
@@ -79,6 +168,7 @@ exports.createMilestone = async (req, res) => {
       description: description?.trim() || null,
       due_date: due_date || null,
       status: status || 'pending',
+      depends_on: dependencyValidation.value ?? null,
       completed_at: status === 'completed' ? new Date() : null
     });
 
@@ -91,22 +181,13 @@ exports.createMilestone = async (req, res) => {
         message: `Milestone "${milestone.name}" has been created for your project.`,
         link: `/projects/${projectId}/milestones`,
         metadata: {
-          milestone_id: milestone.milestone_id,
+          milestone_id: milestone.id,
           milestone_name: milestone.name,
           project_id: projectId
         }
       });
 
-      // Notify involved researchers (those with accepted applications)
-      const { Application } = require('../database/models');
-      const involvedResearchers = await Application.findAll({
-        where: {
-          org_id: project.org_id,
-          status: 'accepted'
-        }
-      });
-
-      const researcherIds = involvedResearchers.map(app => app.researcher_id);
+      const researcherIds = await getCollaboratingResearcherIds(project);
       if (researcherIds.length > 0) {
         await notificationService.createBulkNotifications(
           researcherIds,
@@ -116,7 +197,7 @@ exports.createMilestone = async (req, res) => {
             message: `A new milestone "${milestone.name}" has been created for the project you are collaborating on.`,
             link: `/projects/${projectId}/milestones`,
             metadata: {
-              milestone_id: milestone.milestone_id,
+              milestone_id: milestone.id,
               milestone_name: milestone.name,
               project_id: projectId
             }
@@ -161,10 +242,9 @@ exports.getMilestones = async (req, res) => {
 
     // Filter by status if provided
     if (status) {
-      const validStatuses = ['pending', 'in_progress', 'completed', 'cancelled'];
-      if (!validStatuses.includes(status)) {
+      if (!VALID_STATUSES.includes(status)) {
         return res.status(400).json({ 
-          error: `Invalid status. Must be one of: ${validStatuses.join(', ')}` 
+          error: `Invalid status. Must be one of: ${VALID_STATUSES.join(', ')}` 
         });
       }
       where.status = status;
@@ -179,6 +259,13 @@ exports.getMilestones = async (req, res) => {
     // Fetch milestones
     const milestones = await Milestone.findAll({
       where,
+      include: [
+        {
+          model: Milestone,
+          as: 'dependency',
+          attributes: ['id', 'name', 'status']
+        }
+      ],
       order: [
         ['due_date', 'ASC NULLS LAST'],
         ['created_at', 'DESC']
@@ -218,7 +305,14 @@ exports.getMilestone = async (req, res) => {
       where: {
         id,
         project_id: projectId
-      }
+      },
+      include: [
+        {
+          model: Milestone,
+          as: 'dependency',
+          attributes: ['id', 'name', 'status']
+        }
+      ]
     });
 
     if (!milestone) {
@@ -246,7 +340,7 @@ exports.getMilestone = async (req, res) => {
 exports.updateMilestone = async (req, res) => {
   try {
     const { projectId, id } = req.params;
-    const { name, description, due_date, status } = req.body;
+    const { name, description, due_date, status, depends_on } = req.body;
 
     // Find milestone
     const milestone = await Milestone.findOne({
@@ -260,55 +354,53 @@ exports.updateMilestone = async (req, res) => {
       return res.status(404).json({ error: 'Milestone not found' });
     }
 
-    // Verify project ownership
-    // Verify project ownership
-const project = await Project.findOne({
-  where: { project_id: projectId },
-});
-
-if (!project) {
-  return res.status(404).json({ error: 'Project not found' });
-}
-
-// Load fresh user from DB
-const user = await User.findByPk(req.user.id);
-
-if (!user || user.role !== 'nonprofit') {
-  return res.status(403).json({
-    error: 'Only nonprofit users can update milestones',
-  });
-}
-
-// Debug (optional)
-console.log('Milestone update auth:', {
-  userId: user.id,
-  userOrgId: user.org_id,
-  projectOrgId: project.org_id,
-});
-
-if (project.org_id !== user.org_id) {
-  return res.status(403).json({
-    error:
-      "Access denied. You can only update milestones for your organization's projects",
-  });
-}
+    const ownership = await loadProjectAndNonprofitUser(projectId, req.user.id);
+    if (ownership.error) {
+      const updateMessage = ownership.error.message.replace('manage', 'update');
+      return res.status(ownership.error.status).json({ error: updateMessage });
+    }
+    const { project } = ownership;
 
     // Validate status if provided
-    const validStatuses = ['pending', 'in_progress', 'completed', 'cancelled'];
-    if (status && !validStatuses.includes(status)) {
+    if (status && !VALID_STATUSES.includes(status)) {
       return res.status(400).json({ 
-        error: `Invalid status. Must be one of: ${validStatuses.join(', ')}` 
+        error: `Invalid status. Must be one of: ${VALID_STATUSES.join(', ')}` 
       });
     }
+    const updates = {};
+
+    if (depends_on !== undefined) {
+      const dependencyValidation = await validateDependency({
+        projectId,
+        dependsOn: depends_on,
+        currentMilestoneId: id
+      });
+
+      if (!dependencyValidation.ok) {
+        return res.status(dependencyValidation.status).json({ error: dependencyValidation.message });
+      }
+
+      updates.depends_on = dependencyValidation.value ?? null;
+    }
+
+    const nextStatus = status || milestone.status;
+    const transitionValidation = await validateDependencyStatusTransition({
+      milestone: {
+        depends_on: updates.depends_on !== undefined ? updates.depends_on : milestone.depends_on
+      },
+      nextStatus,
+      projectId
+    });
+    if (!transitionValidation.ok) {
+      return res.status(transitionValidation.status).json({ error: transitionValidation.message });
+    }
+
 
     // Validate name if provided
     if (name !== undefined && (!name || name.trim() === '')) {
       return res.status(400).json({ error: 'Milestone name cannot be empty' });
     }
 
-    // Prepare update object
-    const updates = {};
-    
     if (name !== undefined) updates.name = name.trim();
     if (description !== undefined) updates.description = description?.trim() || null;
     if (due_date !== undefined) updates.due_date = due_date || null;
@@ -330,17 +422,7 @@ if (project.org_id !== user.org_id) {
 
     // Notify about milestone updates
     try {
-      const { Application } = require('../database/models');
-      
-      // Get involved researchers
-      const involvedResearchers = await Application.findAll({
-        where: {
-          org_id: project.org_id,
-          status: 'accepted'
-        }
-      });
-
-      const researcherIds = involvedResearchers.map(app => app.researcher_id);
+      const researcherIds = await getCollaboratingResearcherIds(project);
 
       // Create notification for milestone completion to all collaborators
       if (updates.status && oldStatus !== 'completed' && updates.status === 'completed') {
@@ -497,38 +579,11 @@ exports.deleteMilestone = async (req, res) => {
       return res.status(404).json({ error: 'Milestone not found' });
     }
 
-    // Verify project ownership
-    // Verify project ownership
-const project = await Project.findOne({
-  where: { project_id: projectId },
-});
-
-if (!project) {
-  return res.status(404).json({ error: 'Project not found' });
-}
-
-// Load fresh user from DB
-const user = await User.findByPk(req.user.id);
-
-if (!user || user.role !== 'nonprofit') {
-  return res.status(403).json({
-    error: 'Only nonprofit users can delete milestones',
-  });
-}
-
-// Debug (optional)
-console.log('Milestone delete auth:', {
-  userId: user.id,
-  userOrgId: user.org_id,
-  projectOrgId: project.org_id,
-});
-
-if (project.org_id !== user.org_id) {
-  return res.status(403).json({
-    error:
-      "Access denied. You can only delete milestones for your organization's projects",
-  });
-}
+    const ownership = await loadProjectAndNonprofitUser(projectId, req.user.id);
+    if (ownership.error) {
+      const deleteMessage = ownership.error.message.replace('manage', 'delete');
+      return res.status(ownership.error.status).json({ error: deleteMessage });
+    }
 
     // Delete milestone
     await milestone.destroy();

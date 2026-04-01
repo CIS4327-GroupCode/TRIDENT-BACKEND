@@ -34,7 +34,29 @@ const isNotificationEnabled = (preferences, notificationType) => {
     'milestone_updated': 'inapp_notifications',
     'milestone_completed': 'inapp_notifications',
     'milestone_deadline_approaching': 'inapp_notifications',
-    'milestone_overdue': 'inapp_notifications'
+    'milestone_overdue': 'inapp_notifications',
+    'project_created': 'inapp_notifications',
+    'project_updated': 'inapp_notifications',
+    'project_status_changed': 'inapp_notifications',
+    'project_deleted': 'inapp_notifications',
+    'project_submitted_for_review': 'inapp_notifications',
+    'project_approved': 'inapp_notifications',
+    'project_rejected': 'inapp_notifications',
+    'project_application': 'inapp_notifications',
+    'application_received': 'inapp_notifications',
+    'application_accepted': 'inapp_notifications',
+    'application_rejected': 'inapp_notifications',
+    'invitation': 'inapp_notifications',
+    'rating_received': 'inapp_notifications',
+    'review_moderated': 'inapp_notifications',
+    'agreement_created': 'inapp_notifications',
+    'agreement_pending_signature': 'inapp_notifications',
+    'agreement_signed': 'inapp_notifications',
+    'agreement_activated': 'inapp_notifications',
+    'agreement_terminated': 'inapp_notifications',
+    'user_suspended': 'inapp_notifications',
+    'security': 'inapp_notifications',
+    'system_announcement': 'inapp_notifications'
   };
 
   const preferenceField = typeToPreference[notificationType];

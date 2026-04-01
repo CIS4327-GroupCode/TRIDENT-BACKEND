@@ -86,7 +86,7 @@ const createUser = async (name, email, password_hash, role, mfa_enabled, organiz
 const getUserByEmail = async (email) => {
     const user = await User.findOne({ 
       where: { email },
-      attributes: ['id', 'name', 'email', 'role', 'org_id', 'created_at', 'password_hash']
+      attributes: ['id', 'name', 'email', 'role', 'org_id', 'created_at', 'password_hash', 'mfa_enabled']
     });
     
     if (!user) return null;

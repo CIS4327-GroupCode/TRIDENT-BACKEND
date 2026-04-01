@@ -11,6 +11,15 @@
 const matchingService = require('../services/matchingService');
 const Project = require('../database/models/Project');
 const Organization = require('../database/models/Organization');
+const Match = require('../database/models/Match');
+const ResearcherProfile = require('../database/models/ResearcherProfile');
+const User = require('../database/models/User');
+
+const canAccessProject = (user, project) => {
+  if (!user || !project) return false;
+  if (user.role === 'admin') return true;
+  return user.role === 'nonprofit' && user.org_id && Number(user.org_id) === Number(project.org_id);
+};
 
 /**
  * Get matching researchers for a specific project
@@ -26,12 +35,20 @@ const Organization = require('../database/models/Organization');
 const getProjectMatches = async (req, res) => {
   try {
     const { projectId } = req.params;
-    const { limit = 20, offset = 0, minScore = 10 } = req.query;
+    const {
+      limit = 20,
+      offset = 0,
+      minScore = 10,
+      requireCompliance = 'false',
+      complianceFilter = ''
+    } = req.query;
     
     // Validate parameters
     const validLimit = Math.min(Math.max(parseInt(limit) || 20, 1), 100);
     const validOffset = Math.max(parseInt(offset) || 0, 0);
     const validMinScore = Math.max(Math.min(parseFloat(minScore) ?? 10, 100), 0);
+    const validRequireCompliance = String(requireCompliance).toLowerCase() === 'true';
+    const validComplianceFilter = String(complianceFilter || '');
 
     // Verify project exists and user has access
     const project = await Project.findByPk(projectId, {
@@ -48,12 +65,17 @@ const getProjectMatches = async (req, res) => {
       });
     }
     
-    // Check authorization - TODO: Verify user is project owner or org member
-    // For now, require authentication only
     if (!req.user) {
       return res.status(401).json({
         success: false,
         error: 'Authentication required'
+      });
+    }
+
+    if (!canAccessProject(req.user, project)) {
+      return res.status(403).json({
+        success: false,
+        error: 'Unauthorized to view matches for this project'
       });
     }
     
@@ -61,7 +83,9 @@ const getProjectMatches = async (req, res) => {
     const result = await matchingService.findMatchesForProject(projectId, {
       limit: validLimit,
       offset: validOffset,
-      minScore: validMinScore
+      minScore: validMinScore,
+      requireCompliance: validRequireCompliance,
+      complianceFilter: validComplianceFilter
     });
     
     return res.status(200).json({
@@ -168,13 +192,18 @@ const explainMatch = async (req, res) => {
         error: 'Authentication required'
       });
     }
+
+    const parsedProjectId = Number(projectId);
+    const parsedResearcherId = Number(researcherId);
+    if (!Number.isInteger(parsedProjectId) || !Number.isInteger(parsedResearcherId)) {
+      return res.status(400).json({
+        success: false,
+        error: 'projectId and researcherId must be valid integers'
+      });
+    }
     
     // Fetch project and researcher
-    const Project = require('../database/models/Project');
-    const ResearcherProfile = require('../database/models/ResearcherProfile');
-    const Organization = require('../database/models/Organization');
-    
-    const project = await Project.findByPk(projectId, {
+    const project = await Project.findByPk(parsedProjectId, {
       include: [{
         model: Organization,
         as: 'organization',
@@ -183,13 +212,23 @@ const explainMatch = async (req, res) => {
     });
     
     const researcher = await ResearcherProfile.findOne({
-      where: { user_id: researcherId }
+      where: { user_id: parsedResearcherId }
     });
     
     if (!project || !researcher) {
       return res.status(404).json({
         success: false,
         error: 'Project or researcher not found'
+      });
+    }
+
+    const isResearcherSelf = Number(req.user.id) === parsedResearcherId;
+    const canViewAsProjectOwner = canAccessProject(req.user, project);
+
+    if (!isResearcherSelf && !canViewAsProjectOwner) {
+      return res.status(403).json({
+        success: false,
+        error: 'Unauthorized to view this match explanation'
       });
     }
     
@@ -274,10 +313,87 @@ const explainMatch = async (req, res) => {
  * Phase 1: Returns not implemented
  */
 const dismissMatch = async (req, res) => {
-  return res.status(501).json({
-    success: false,
-    error: 'Dismiss functionality will be implemented in Phase 3'
-  });
+  try {
+    const { matchId, projectId, researcherId } = req.params;
+
+    if (!req.user) {
+      return res.status(401).json({
+        success: false,
+        error: 'Authentication required'
+      });
+    }
+
+    let match = null;
+
+    if (matchId) {
+      match = await Match.findByPk(matchId);
+    } else if (projectId && researcherId) {
+      match = await Match.findOne({
+        where: {
+          brief_id: Number(projectId),
+          researcher_id: Number(researcherId)
+        }
+      });
+
+      if (!match) {
+        match = await Match.create({
+          brief_id: Number(projectId),
+          researcher_id: Number(researcherId),
+          dismissed: true,
+          calculated_at: new Date()
+        });
+
+        return res.status(200).json({
+          success: true,
+          message: 'Match dismissed',
+          match: match.toSafeObject()
+        });
+      }
+    }
+
+    if (!match) {
+      return res.status(404).json({
+        success: false,
+        error: 'Match not found'
+      });
+    }
+
+    const project = await Project.findByPk(match.brief_id);
+
+    if (!project) {
+      return res.status(404).json({
+        success: false,
+        error: 'Project not found for match'
+      });
+    }
+
+    const isResearcherOwner = req.user.role === 'researcher' && Number(req.user.id) === Number(match.researcher_id);
+    const isProjectOwner = canAccessProject(req.user, project);
+
+    if (!isResearcherOwner && !isProjectOwner) {
+      return res.status(403).json({
+        success: false,
+        error: 'Unauthorized to dismiss this match'
+      });
+    }
+
+    match.dismissed = true;
+    match.calculated_at = new Date();
+    await match.save();
+
+    return res.status(200).json({
+      success: true,
+      message: 'Match dismissed',
+      match: match.toSafeObject()
+    });
+  } catch (error) {
+    console.error('Error in dismissMatch:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to dismiss match',
+      message: error.message
+    });
+  }
 };
 
 /**
@@ -288,10 +404,89 @@ const dismissMatch = async (req, res) => {
  * Phase 1: Returns not implemented
  */
 const recalculateAllMatches = async (req, res) => {
-  return res.status(501).json({
-    success: false,
-    error: 'Batch recalculation will be implemented in Phase 3'
-  });
+  try {
+    const projects = await Project.findAll({
+      where: {
+        status: 'open'
+      }
+    });
+
+    const researchers = await ResearcherProfile.findAll({
+      where: {
+        user_id: {
+          [require('sequelize').Op.ne]: null
+        }
+      }
+    });
+
+    const users = await User.findAll({
+      where: {
+        id: researchers.map(r => r.user_id),
+        account_status: 'active',
+        deleted_at: null
+      },
+      attributes: ['id']
+    });
+
+    const activeUserIds = new Set(users.map(u => u.id));
+    const activeResearchers = researchers.filter(r => activeUserIds.has(r.user_id));
+
+    let matchesCreated = 0;
+    let matchesUpdated = 0;
+
+    for (const project of projects) {
+      const organization = await Organization.findByPk(project.org_id);
+      const projectData = project.toJSON();
+      projectData.organization = organization ? organization.toJSON() : null;
+
+      for (const researcher of activeResearchers) {
+        const scoreData = matchingService.calculateMatchScore(projectData, researcher.toJSON());
+
+        const existing = await Match.findOne({
+          where: {
+            brief_id: project.project_id,
+            researcher_id: researcher.user_id
+          }
+        });
+
+        if (existing) {
+          existing.score = scoreData.totalScore;
+          existing.score_breakdown = scoreData.breakdown;
+          existing.calculated_at = new Date();
+          await existing.save();
+          matchesUpdated += 1;
+        } else {
+          await Match.create({
+            brief_id: project.project_id,
+            researcher_id: researcher.user_id,
+            score: scoreData.totalScore,
+            score_breakdown: scoreData.breakdown,
+            dismissed: false,
+            calculated_at: new Date()
+          });
+          matchesCreated += 1;
+        }
+      }
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Match recalculation complete',
+      summary: {
+        projectsProcessed: projects.length,
+        researchersProcessed: activeResearchers.length,
+        matchesCreated,
+        matchesUpdated
+      }
+    });
+  } catch (error) {
+    console.error('Error in recalculateAllMatches:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to recalculate matches',
+      message: error.message
+    });
+  }
 };
 
 module.exports = {

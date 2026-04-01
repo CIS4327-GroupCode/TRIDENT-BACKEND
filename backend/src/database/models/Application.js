@@ -66,6 +66,15 @@ Application.init(
       },
       field: 'org_id'
     },
+    project_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      references: {
+        model: 'project_ideas',
+        key: 'project_id'
+      },
+      field: 'project_id'
+    },
     researcher_id: {
       type: DataTypes.INTEGER,
       allowNull: true,
