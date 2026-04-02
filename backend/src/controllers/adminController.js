@@ -4,6 +4,51 @@ const bcrypt = require('bcryptjs');
 const notificationService = require('../services/notificationService');
 const { getStorageAdapter } = require('../services/storage');
 const { isStrongPassword, PASSWORD_POLICY_MESSAGE } = require('../utils/passwordPolicy');
+const { syncProjectsCompletedForProject } = require('../services/researcherMetricsService');
+
+const COMPLETED_REVERT_TARGET_STATUSES = ['draft', 'open', 'in_progress', 'cancelled'];
+
+const parseCompletedReversionRequest = (review) => {
+  if (!review || review.previous_status !== 'completed' || review.action !== 'submitted') {
+    return null;
+  }
+
+  let parsedChanges = null;
+  if (review.changes_requested) {
+    try {
+      parsedChanges = JSON.parse(review.changes_requested);
+    } catch (error) {
+      parsedChanges = null;
+    }
+  }
+
+  if (!parsedChanges || parsedChanges.request_type !== 'completed_reversion') {
+    return null;
+  }
+
+  const requestedStatus = String(parsedChanges.requested_status || '').trim();
+  if (!COMPLETED_REVERT_TARGET_STATUSES.includes(requestedStatus)) {
+    return null;
+  }
+
+  return {
+    requestedStatus,
+    reason: review.feedback || null,
+  };
+};
+
+const getPendingCompletedReversionRequest = async (projectId) => {
+  const latestSubmission = await ProjectReview.findOne({
+    where: {
+      project_id: projectId,
+      action: 'submitted',
+      new_status: 'pending_review',
+    },
+    order: [['reviewed_at', 'DESC'], ['created_at', 'DESC']],
+  });
+
+  return parseCompletedReversionRequest(latestSubmission);
+};
 
 /**
  * Get dashboard statistics
@@ -531,8 +576,13 @@ const updateProjectStatus = async (req, res) => {
       return res.status(404).json({ error: 'Project not found' });
     }
 
+    const previousStatus = project.status;
     project.status = status;
     await project.save();
+
+    if ((previousStatus === 'completed') !== (status === 'completed')) {
+      await syncProjectsCompletedForProject(project.project_id);
+    }
 
     res.status(200).json({ 
       message: `Project status updated to ${status}`,
@@ -799,9 +849,13 @@ const approveProject = async (req, res) => {
     }
 
     const previousStatus = project.status;
+    const completedReversionRequest = await getPendingCompletedReversionRequest(id);
+    const approvedStatus = completedReversionRequest
+      ? completedReversionRequest.requestedStatus
+      : 'approved';
 
     // Update project status
-    await project.update({ status: 'approved' });
+    await project.update({ status: approvedStatus });
 
     // Create review record
     await ProjectReview.create({
@@ -809,27 +863,49 @@ const approveProject = async (req, res) => {
       reviewer_id: reviewerId,
       action: 'approved',
       previous_status: previousStatus,
-      new_status: 'approved',
+      new_status: approvedStatus,
       feedback: feedback || null,
       reviewed_at: new Date()
     });
+
+    if ((previousStatus === 'completed') !== (approvedStatus === 'completed')) {
+      await syncProjectsCompletedForProject(project.project_id);
+    }
 
     // Get organization owner to notify
     const org = await Organization.findByPk(project.org_id);
     if (org && org.user_id) {
       try {
-        await notificationService.createNotification({
-          userId: org.user_id,
-          type: 'project_approved',
-          title: 'Project Approved',
-          message: `Great news! Your project "${project.title}" has been approved and is now visible to researchers.`,
-          link: `/projects/${project.project_id}`,
-          metadata: {
-            project_id: project.project_id,
-            project_title: project.title,
-            feedback: feedback
-          }
-        });
+        if (completedReversionRequest) {
+          await notificationService.createNotification({
+            userId: org.user_id,
+            type: 'project_status_changed',
+            title: 'Completed Project Reversion Approved',
+            message: `Your request to revert "${project.title}" was approved. New status: ${approvedStatus}.`,
+            link: `/projects/${project.project_id}`,
+            metadata: {
+              project_id: project.project_id,
+              project_title: project.title,
+              old_status: 'completed',
+              requested_status: approvedStatus,
+              revert_reason: completedReversionRequest.reason,
+              feedback,
+            }
+          });
+        } else {
+          await notificationService.createNotification({
+            userId: org.user_id,
+            type: 'project_approved',
+            title: 'Project Approved',
+            message: `Great news! Your project "${project.title}" has been approved and is now visible to researchers.`,
+            link: `/projects/${project.project_id}`,
+            metadata: {
+              project_id: project.project_id,
+              project_title: project.title,
+              feedback
+            }
+          });
+        }
       } catch (notifError) {
         console.error('Failed to create approval notification:', notifError);
       }
@@ -847,7 +923,9 @@ const approveProject = async (req, res) => {
     });
 
     res.status(200).json({ 
-      message: 'Project approved successfully',
+      message: completedReversionRequest
+        ? `Completed project reversion approved. Status updated to ${approvedStatus}`
+        : 'Project approved successfully',
       project: updatedProject
     });
   } catch (error) {
@@ -883,9 +961,11 @@ const rejectProject = async (req, res) => {
     }
 
     const previousStatus = project.status;
+    const completedReversionRequest = await getPendingCompletedReversionRequest(id);
+    const rejectedStatus = completedReversionRequest ? 'completed' : 'rejected';
 
     // Update project status
-    await project.update({ status: 'rejected' });
+    await project.update({ status: rejectedStatus });
 
     // Create review record
     await ProjectReview.create({
@@ -893,27 +973,48 @@ const rejectProject = async (req, res) => {
       reviewer_id: reviewerId,
       action: 'rejected',
       previous_status: previousStatus,
-      new_status: 'rejected',
+      new_status: rejectedStatus,
       feedback: rejection_reason,
       reviewed_at: new Date()
     });
+
+    if ((previousStatus === 'completed') !== (rejectedStatus === 'completed')) {
+      await syncProjectsCompletedForProject(project.project_id);
+    }
 
     // Get organization owner to notify
     const org = await Organization.findByPk(project.org_id);
     if (org && org.user_id) {
       try {
-        await notificationService.createNotification({
-          userId: org.user_id,
-          type: 'project_rejected',
-          title: 'Project Rejected',
-          message: `Your project "${project.title}" has been reviewed and rejected. ${rejection_reason}`,
-          link: `/projects/${project.project_id}`,
-          metadata: {
-            project_id: project.project_id,
-            project_title: project.title,
-            rejection_reason: rejection_reason
-          }
-        });
+        if (completedReversionRequest) {
+          await notificationService.createNotification({
+            userId: org.user_id,
+            type: 'project_status_changed',
+            title: 'Completed Project Reversion Rejected',
+            message: `Your request to revert "${project.title}" was rejected. The project remains completed. ${rejection_reason}`,
+            link: `/projects/${project.project_id}`,
+            metadata: {
+              project_id: project.project_id,
+              project_title: project.title,
+              rejection_reason,
+              requested_status: completedReversionRequest.requestedStatus,
+              revert_reason: completedReversionRequest.reason,
+            }
+          });
+        } else {
+          await notificationService.createNotification({
+            userId: org.user_id,
+            type: 'project_rejected',
+            title: 'Project Rejected',
+            message: `Your project "${project.title}" has been reviewed and rejected. ${rejection_reason}`,
+            link: `/projects/${project.project_id}`,
+            metadata: {
+              project_id: project.project_id,
+              project_title: project.title,
+              rejection_reason
+            }
+          });
+        }
       } catch (notifError) {
         console.error('Failed to create rejection notification:', notifError);
       }
@@ -931,7 +1032,9 @@ const rejectProject = async (req, res) => {
     });
 
     res.status(200).json({ 
-      message: 'Project rejected',
+      message: completedReversionRequest
+        ? 'Completed project reversion request rejected. Project restored to completed.'
+        : 'Project rejected',
       project: updatedProject
     });
   } catch (error) {
@@ -963,6 +1066,13 @@ const requestProjectChanges = async (req, res) => {
     if (project.status !== 'pending_review') {
       return res.status(400).json({ 
         error: `Cannot request changes for project with status "${project.status}". Project must be in pending_review status.` 
+      });
+    }
+
+    const completedReversionRequest = await getPendingCompletedReversionRequest(id);
+    if (completedReversionRequest) {
+      return res.status(400).json({
+        error: 'Use approve or reject for completed project reversion requests',
       });
     }
 

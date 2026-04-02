@@ -21,6 +21,7 @@
     "db:sync:nonprod": "node sync-nonprod-db.js",
     "db:sync:dev": "node sync-nonprod-db.js --env development",
     "db:sync:staging": "node sync-nonprod-db.js --env staging",
+    "db:backfill:projects-completed": "node scripts/backfill-projects-completed.js",
     "db:sync:schema": "node scripts/db-sync-schema.js",
     "db:sync:diff": "node scripts/db-sync-diff.js",
     "db:sync:merge": "node scripts/db-sync-merge.js",

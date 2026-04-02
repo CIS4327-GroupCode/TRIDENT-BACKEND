@@ -33,6 +33,7 @@ const AuditLog = require('./src/database/models/AuditLog');
 const Attachment = require('./src/database/models/Attachment');
 const Notification = require('./src/database/models/Notification');
 const Contract = require('./src/database/models/Contract');
+const { syncAllProjectsCompleted } = require('./src/services/researcherMetricsService');
 
 async function seedDatabase() {
   try {
@@ -1374,6 +1375,11 @@ async function seedDatabase() {
       applications = await Application.findAll();
       console.log(`✓ Skipped - insufficient researchers/organizations\n`);
     }
+
+    // Keep projects_completed system-managed and derived from accepted applications on completed projects.
+    console.log('🧮 Step 11.5: Synchronizing projects_completed counters...');
+    const syncedProfiles = await syncAllProjectsCompleted();
+    console.log(`✓ Synchronized projects_completed for ${syncedProfiles.length} researcher profiles\n`);
 
     // ==================== STEP 12: Create Matches ====================
     console.log('🤝 Step 12: Creating Match Records...');

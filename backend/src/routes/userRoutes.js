@@ -14,6 +14,7 @@ const passwordChangeLimiter = createRateLimiter({
 // Public routes (no authentication required)
 router.get('/browse/researchers', userController.browseResearchers);
 router.get('/:userId/ratings', ratingController.getUserRatings);
+router.get('/:userId/ratings/given', ratingController.getRatingsGivenByUser);
 router.get('/:userId/ratings/summary', ratingController.getUserRatingSummary);
 
 // All routes below require authentication

@@ -1,6 +1,7 @@
 const {
   Project,
   Organization,
+  Application,
   ProjectReview,
   User,
   SavedProject,
@@ -8,6 +9,7 @@ const {
 } = require('../database/models');
 const { Op } = require('sequelize');
 const notificationService = require('../services/notificationService');
+const { syncProjectsCompletedForProject } = require('../services/researcherMetricsService');
 
 const buildRatingSummary = (ratings = []) => {
   if (!ratings.length) {
@@ -760,6 +762,10 @@ const updateProject = async (req, res) => {
       'status',
     ];
 
+    const revertReason = typeof req.body?.revert_reason === 'string'
+      ? req.body.revert_reason.trim()
+      : '';
+
     const updates = {};
     Object.keys(req.body).forEach((key) => {
       if (allowedFields.includes(key) && req.body[key] !== undefined) {
@@ -846,7 +852,39 @@ const updateProject = async (req, res) => {
 
     const oldStatus = project.status;
     const oldTitle = project.title;
+
+    let completedReversionRequest = null;
+    if (updates.status && oldStatus === 'completed' && updates.status !== 'completed') {
+      if (!revertReason) {
+        return res.status(400).json({
+          error: 'A revert_reason is required when requesting to revert a completed project',
+        });
+      }
+
+      completedReversionRequest = {
+        reason: revertReason,
+        requestedStatus: updates.status,
+      };
+      updates.status = 'pending_review';
+    }
+
     await project.update(updates);
+
+    if (completedReversionRequest) {
+      await ProjectReview.create({
+        project_id: project.project_id,
+        reviewer_id: userId,
+        action: 'submitted',
+        previous_status: oldStatus,
+        new_status: 'pending_review',
+        feedback: completedReversionRequest.reason,
+        changes_requested: JSON.stringify({
+          request_type: 'completed_reversion',
+          requested_status: completedReversionRequest.requestedStatus,
+        }),
+        reviewed_at: new Date(),
+      });
+    }
 
     // Create notifications for updates
     try {
@@ -868,54 +906,104 @@ const updateProject = async (req, res) => {
 
       // Notify about status changes to owner and involved researchers
       if (updates.status && oldStatus !== updates.status) {
-        const statusMessages = {
-          'open': `Your project "${project.title}" is now open for researchers to apply!`,
-          'in_progress': `Your project "${project.title}" is now in progress.`,
-          'completed': `Congratulations! Your project "${project.title}" has been completed.`,
-          'cancelled': `Your project "${project.title}" has been cancelled.`,
-          'draft': `Your project "${project.title}" has been saved as draft.`
-        };
+        if (completedReversionRequest) {
+          await notificationService.createNotification({
+            userId,
+            type: 'project_submitted_for_review',
+            title: 'Completed Project Reversion Requested',
+            message: `Your request to revert project "${project.title}" to ${completedReversionRequest.requestedStatus} was submitted for admin approval.`,
+            link: `/projects/${project.project_id}`,
+            metadata: {
+              project_id: project.project_id,
+              project_title: project.title,
+              old_status: oldStatus,
+              new_status: updates.status,
+              requested_status: completedReversionRequest.requestedStatus,
+              revert_reason: completedReversionRequest.reason,
+            },
+          });
 
-        // Notify owner
-        await notificationService.createNotification({
-          userId: userId,
-          type: 'project_status_changed',
-          title: `Project Status Changed: ${updates.status}`,
-          message: statusMessages[updates.status] || `Your project status changed to ${updates.status}`,
-          link: `/projects/${project.project_id}`,
-          metadata: {
-            project_id: project.project_id,
-            project_title: project.title,
-            old_status: oldStatus,
-            new_status: updates.status
-          }
-        });
+          const admins = await User.findAll({
+            where: {
+              role: {
+                [Op.in]: ['admin', 'super_admin'],
+              },
+            },
+            attributes: ['id'],
+          });
 
-        // Get involved researchers (those with accepted applications) and notify them
-        const { Application, User: UserModel } = require('../database/models');
-        const involvedResearchers = await Application.findAll({
-          where: {
-            org_id: project.org_id,
-            status: 'accepted'
-          }
-        });
-
-        const researcherUserIds = involvedResearchers.map(app => app.researcher_id);
-        if (researcherUserIds.length > 0) {
-          await notificationService.createBulkNotifications(
-            researcherUserIds,
-            {
-              type: 'project_status_changed',
-              title: `Project Status: ${updates.status}`,
-              message: `The project "${project.title}" you are working on has changed status to ${updates.status}.`,
-              link: `/projects/${project.project_id}`,
-              metadata: {
-                project_id: project.project_id,
-                project_title: project.title,
-                new_status: updates.status
+          const adminIds = admins.map((admin) => admin.id);
+          if (adminIds.length > 0) {
+            await notificationService.createBulkNotifications(
+              adminIds,
+              {
+                type: 'project_submitted_for_review',
+                title: 'Completed Project Reversion Pending Approval',
+                message: `Project "${project.title}" requested reversion to ${completedReversionRequest.requestedStatus}. Reason: ${completedReversionRequest.reason}`,
+                link: `/admin/projects/${project.project_id}`,
+                metadata: {
+                  project_id: project.project_id,
+                  project_title: project.title,
+                  requested_status: completedReversionRequest.requestedStatus,
+                  revert_reason: completedReversionRequest.reason,
+                },
               }
-            }
-          );
+            );
+          }
+        } else {
+          const statusMessages = {
+            open: `Your project "${project.title}" is now open for researchers to apply!`,
+            in_progress: `Your project "${project.title}" is now in progress.`,
+            completed: `Congratulations! Your project "${project.title}" has been completed.`,
+            cancelled: `Your project "${project.title}" has been cancelled.`,
+            draft: `Your project "${project.title}" has been saved as draft.`,
+          };
+
+          // Notify owner
+          await notificationService.createNotification({
+            userId,
+            type: 'project_status_changed',
+            title: `Project Status Changed: ${updates.status}`,
+            message: statusMessages[updates.status] || `Your project status changed to ${updates.status}`,
+            link: `/projects/${project.project_id}`,
+            metadata: {
+              project_id: project.project_id,
+              project_title: project.title,
+              old_status: oldStatus,
+              new_status: updates.status,
+            },
+          });
+
+          // Get involved researchers (those with accepted applications) and notify them
+          const involvedResearchers = await Application.findAll({
+            where: {
+              project_id: project.project_id,
+              status: 'accepted',
+            },
+            attributes: ['researcher_id'],
+          });
+
+          const researcherUserIds = [...new Set(involvedResearchers.map((app) => app.researcher_id).filter(Boolean))];
+          if (researcherUserIds.length > 0) {
+            await notificationService.createBulkNotifications(
+              researcherUserIds,
+              {
+                type: 'project_status_changed',
+                title: `Project Status: ${updates.status}`,
+                message: `The project "${project.title}" you are working on has changed status to ${updates.status}.`,
+                link: `/projects/${project.project_id}`,
+                metadata: {
+                  project_id: project.project_id,
+                  project_title: project.title,
+                  new_status: updates.status,
+                },
+              }
+            );
+          }
+        }
+
+        if ((oldStatus === 'completed') !== (updates.status === 'completed')) {
+          await syncProjectsCompletedForProject(project.project_id);
         }
       }
     } catch (notifError) {
@@ -923,7 +1011,9 @@ const updateProject = async (req, res) => {
     }
 
     return res.status(200).json({
-      message: 'Project updated successfully',
+      message: completedReversionRequest
+        ? 'Completed project reversion request submitted for admin approval'
+        : 'Project updated successfully',
       project,
     });
   } catch (error) {
