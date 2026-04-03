@@ -10,6 +10,8 @@ const {
 } = require('../database/models');
 const { decryptMessage } = require('../utils/encryption');
 
+const MESSAGE_DECRYPTION_PLACEHOLDER = '[Message could not be decrypted]';
+
 function safeDecrypt(body) {
   if (!process.env.MSG_SECRET) {
     throw new Error('MSG_SECRET_MISSING');
@@ -22,8 +24,8 @@ function safeDecrypt(body) {
   try {
     return decryptMessage(body, process.env.MSG_SECRET);
   } catch (err) {
-    console.warn('Decrypt failed in admin audit, fallback to plain text');
-    return body;
+    console.warn('Decrypt failed in admin audit, using placeholder');
+    return MESSAGE_DECRYPTION_PLACEHOLDER;
   }
 }
 

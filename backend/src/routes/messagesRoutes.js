@@ -2,9 +2,22 @@ const express = require('express');
 const router = express.Router();
 const multer = require('multer');
 const path = require('path');
+const fs = require('fs');
 
 const messageService = require('../services/messageService');
 const { authenticate } = require('../middleware/auth');
+const { createRateLimiter } = require('../middleware/rateLimit');
+
+const MAX_UPLOAD_SIZE_BYTES = 10 * 1024 * 1024;
+const ALLOWED_UPLOAD_MIME_TYPES = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'application/pdf',
+  'text/plain',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+]);
 
 function handleServiceError(res, error) {
   console.error(error);
@@ -15,8 +28,12 @@ function handleServiceError(res, error) {
     case 'CREATOR_ID_REQUIRED':
     case 'GROUP_NEEDS_AT_LEAST_2_PARTICIPANTS':
     case 'INVALID_INPUT':
+    case 'INVALID_PAGINATION':
     case 'INVALID_THREAD_OR_SENDER':
     case 'MESSAGE_OR_ATTACHMENT_REQUIRED':
+    case 'MESSAGE_BODY_TOO_LONG':
+    case 'FILE_TOO_LARGE':
+    case 'UNSUPPORTED_FILE_TYPE':
     case 'ONLY_GROUP_THREADS_CAN_ADD_PARTICIPANTS':
     case 'USER_NOT_FOUND':
       return res.status(400).json({
@@ -58,7 +75,9 @@ function handleServiceError(res, error) {
 
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
-    cb(null, path.join(process.cwd(), 'uploads'));
+    const uploadsDir = path.join(process.cwd(), 'uploads');
+    fs.mkdirSync(uploadsDir, { recursive: true });
+    cb(null, uploadsDir);
   },
   filename: function (req, file, cb) {
     const safeOriginalName = file.originalname.replace(/\s+/g, '_');
@@ -67,12 +86,69 @@ const storage = multer.diskStorage({
   },
 });
 
-const upload = multer({ storage });
+const upload = multer({
+  storage,
+  limits: {
+    fileSize: MAX_UPLOAD_SIZE_BYTES,
+  },
+  fileFilter: (req, file, cb) => {
+    if (!ALLOWED_UPLOAD_MIME_TYPES.has(file.mimetype)) {
+      cb(new Error('UNSUPPORTED_FILE_TYPE'));
+      return;
+    }
+    cb(null, true);
+  },
+});
+
+const messageUploadRateLimiter = createRateLimiter({
+  windowMs: 60 * 1000,
+  maxRequests: 10,
+  keySelector: (req) => `message-upload:${req.user?.id || req.ip || 'unknown'}`,
+});
+
+function handleUpload(req, res, next) {
+  upload.single('file')(req, res, (err) => {
+    if (!err) {
+      next();
+      return;
+    }
+
+    if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE') {
+      handleServiceError(res, new Error('FILE_TOO_LARGE'));
+      return;
+    }
+
+    if (err.message === 'UNSUPPORTED_FILE_TYPE') {
+      handleServiceError(res, new Error('UNSUPPORTED_FILE_TYPE'));
+      return;
+    }
+
+    console.error('UPLOAD MIDDLEWARE ERROR:', err);
+    handleServiceError(res, new Error('INVALID_INPUT'));
+  });
+}
+
+function validatePaginationQuery(limit, before) {
+  if (limit !== undefined) {
+    const numericLimit = Number(limit);
+
+    if (!Number.isInteger(numericLimit) || numericLimit < 1 || numericLimit > 100) {
+      throw new Error('INVALID_PAGINATION');
+    }
+  }
+
+  if (before) {
+    const parsedDate = new Date(before);
+    if (Number.isNaN(parsedDate.getTime())) {
+      throw new Error('INVALID_PAGINATION');
+    }
+  }
+}
 
 router.use(authenticate);
 
 // Upload a file for later message attachment
-router.post('/upload', upload.single('file'), async (req, res) => {
+router.post('/upload', messageUploadRateLimiter, handleUpload, async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({
@@ -181,6 +257,8 @@ router.get('/threads/:threadId/messages', async (req, res) => {
   try {
     const { threadId } = req.params;
     const { limit, before = null } = req.query;
+
+    validatePaginationQuery(limit, before);
 
     const result = await messageService.getThreadMessages({
       threadId,

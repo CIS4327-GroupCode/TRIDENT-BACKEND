@@ -9,6 +9,9 @@ const {
 } = require('../database/models');
 const { encryptMessage, decryptMessage } = require('../utils/encryption');
 
+const MESSAGE_DECRYPTION_PLACEHOLDER = '[Message could not be decrypted]';
+const MAX_MESSAGE_BODY_LENGTH = 10000;
+
 function safeDecrypt(body) {
   if (!process.env.MSG_SECRET) {
     throw new Error('MSG_SECRET_MISSING');
@@ -21,8 +24,8 @@ function safeDecrypt(body) {
   try {
     return decryptMessage(body, process.env.MSG_SECRET);
   } catch (err) {
-    console.warn('Decrypt failed, fallback to plain text');
-    return body;
+    console.warn('Decrypt failed for message body, using placeholder');
+    return MESSAGE_DECRYPTION_PLACEHOLDER;
   }
 }
 
@@ -95,20 +98,13 @@ async function getOrCreateDirectThread({ userAId, userBId, isSensitive = false }
   const sortedIds = [normalizedUserAId, normalizedUserBId].sort((a, b) => a - b);
   const directKey = `${sortedIds[0]}:${sortedIds[1]}`;
 
-  let thread = await Thread.findOne({
-    where: {
-      thread_type: 'direct',
-      direct_key: directKey,
-    },
-  });
-
-  if (thread) {
-    return thread;
-  }
-
   return sequelize.transaction(async (transaction) => {
-    thread = await Thread.create(
-      {
+    const [thread, created] = await Thread.findOrCreate({
+      where: {
+        thread_type: 'direct',
+        direct_key: directKey,
+      },
+      defaults: {
         thread_type: 'direct',
         direct_key: directKey,
         name: null,
@@ -116,28 +112,30 @@ async function getOrCreateDirectThread({ userAId, userBId, isSensitive = false }
         is_sensitive: Boolean(isSensitive),
         last_message_at: null,
       },
-      { transaction }
-    );
+      transaction,
+    });
 
-    await ThreadParticipant.bulkCreate(
-      [
-        {
-          thread_id: thread.id,
-          user_id: normalizedUserAId,
-          unread_count: 0,
-          last_read_message_id: null,
-          joined_at: new Date(),
-        },
-        {
-          thread_id: thread.id,
-          user_id: normalizedUserBId,
-          unread_count: 0,
-          last_read_message_id: null,
-          joined_at: new Date(),
-        },
-      ],
-      { transaction }
-    );
+    if (created) {
+      await ThreadParticipant.bulkCreate(
+        [
+          {
+            thread_id: thread.id,
+            user_id: normalizedUserAId,
+            unread_count: 0,
+            last_read_message_id: null,
+            joined_at: new Date(),
+          },
+          {
+            thread_id: thread.id,
+            user_id: normalizedUserBId,
+            unread_count: 0,
+            last_read_message_id: null,
+            joined_at: new Date(),
+          },
+        ],
+        { transaction }
+      );
+    }
 
     return thread;
   });
@@ -471,6 +469,10 @@ async function sendMessage({ threadId, senderId, body, attachments = [] }) {
     throw new Error('MESSAGE_OR_ATTACHMENT_REQUIRED');
   }
 
+  if (trimmedBody.length > MAX_MESSAGE_BODY_LENGTH) {
+    throw new Error('MESSAGE_BODY_TOO_LONG');
+  }
+
   if (!process.env.MSG_SECRET) {
     throw new Error('MSG_SECRET_MISSING');
   }
@@ -572,6 +574,14 @@ async function sendMessage({ threadId, senderId, body, attachments = [] }) {
 async function markThreadRead(threadId, userId) {
   const normalizedThreadId = Number(threadId);
   const normalizedUserId = Number(userId);
+
+  const thread = await Thread.findByPk(normalizedThreadId, {
+    attributes: ['id'],
+  });
+
+  if (!thread) {
+    throw new Error('THREAD_NOT_FOUND');
+  }
 
   const allowed = await isUserInThread(normalizedThreadId, normalizedUserId);
 
