@@ -92,7 +92,7 @@ const logNotificationFailure = async (userId, type, error) => {
       type: 'system_announcement',
       title: 'Notification System Error',
       message: `Failed to create notification (type: ${type}) for user ${userId}. Error: ${error.message}`,
-      link: '/admin/logs',
+      link: '/admin?tab=overview',
       metadata: {
         original_user_id: userId,
         notification_type: type,

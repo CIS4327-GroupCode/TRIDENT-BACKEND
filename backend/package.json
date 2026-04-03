@@ -13,7 +13,6 @@
     "test:models": "jest tests/models --runInBand",
     "test:integration": "jest tests/integration --runInBand",
     "test:migrations": "jest tests/integration/database.test.js --runInBand",
-    "db:migrate": "sequelize-cli db:migrate",
     "db:migrate:undo": "sequelize-cli db:migrate:undo",
     "db:migrate:undo:all": "sequelize-cli db:migrate:undo:all",
     "db:seed": "sequelize-cli db:seed:all",

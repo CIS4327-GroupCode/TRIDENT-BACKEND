@@ -257,7 +257,7 @@ const suspendUser = async (req, res) => {
         type: 'user_suspended',
         title: 'Account Suspended',
         message: `Your account has been suspended. Reason: ${reason || 'Not provided'}.`,
-        link: '/help',
+        link: '/contact',
         metadata: {
           reason: reason
         }

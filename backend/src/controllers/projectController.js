@@ -940,7 +940,7 @@ const updateProject = async (req, res) => {
                 type: 'project_submitted_for_review',
                 title: 'Completed Project Reversion Pending Approval',
                 message: `Project "${project.title}" requested reversion to ${completedReversionRequest.requestedStatus}. Reason: ${completedReversionRequest.reason}`,
-                link: `/admin/projects/${project.project_id}`,
+                link: '/admin?tab=pending-review',
                 metadata: {
                   project_id: project.project_id,
                   project_title: project.title,
@@ -1078,7 +1078,7 @@ const deleteProject = async (req, res) => {
         type: 'project_deleted',
         title: 'Project Deleted',
         message: `Your project "${projectTitle}" has been permanently deleted.`,
-        link: '/projects',
+        link: '/dashboard/nonprofit?tab=projects',
         metadata: {
           project_id: projectId,
           project_title: projectTitle
@@ -1197,7 +1197,7 @@ const submitForReview = async (req, res) => {
             type: 'project_submitted_for_review',
             title: 'New Project Submission',
             message: `Project "${project.title}" from ${user.organization?.name || 'an organization'} is pending your review.`,
-            link: `/admin/projects/${projectId}`,
+            link: '/admin?tab=pending-review',
             metadata: {
               project_id: projectId,
               project_title: project.title,
