@@ -7,8 +7,6 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const sequelize = require('./database');
 
-const messagesRouter = require('./messages');
-
 const app = express();
 
 // CORS configuration - allow frontend to connect from multiple ports

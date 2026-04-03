@@ -1,111 +1,213 @@
-const express = require("express");
+const express = require('express');
 const router = express.Router();
-const { encryptMessage, decryptMessage } = require("../utils/encryption");
-const sequelize = require("../database"); // your existing DB connection
-const notificationService = require("../services/notificationService");
-const { authenticate, requireAdmin } = require("../middleware/auth");
 
-// SEND MESSAGE (encrypt before storing)
-router.post("/send", authenticate, async (req, res) => {
-    try {
-        const { thread_id, sender_id, recipient_id, body } = req.body;
 
-        if (!thread_id || !sender_id || !recipient_id || !body) {
-            return res.status(400).json({ error: "thread_id, sender_id, recipient_id, and body are required" });
-        }
+const messageService = require('../services/messageService');
+const { authenticate } = require('../middleware/auth'); // adjust if your export is different
 
-        if (Number(sender_id) !== Number(req.user.id)) {
-            return res.status(403).json({ error: "sender_id must match authenticated user" });
-        }
+function handleServiceError(res, error) {
+  console.error(error);
 
-        const encryptedBody = encryptMessage(body, process.env.MSG_SECRET);
+  switch (error.message) {
+    case 'INVALID_USER_IDS':
+    case 'CANNOT_MESSAGE_SELF':
+    case 'CREATOR_ID_REQUIRED':
+    case 'GROUP_NEEDS_AT_LEAST_2_PARTICIPANTS':
+    case 'INVALID_INPUT':
+    case 'INVALID_THREAD_OR_SENDER':
+    case 'MESSAGE_OR_ATTACHMENT_REQUIRED':
+    case 'ONLY_GROUP_THREADS_CAN_ADD_PARTICIPANTS':
+      return res.status(400).json({
+        success: false,
+        error: error.message,
+      });
 
-        await sequelize.query(
-            `INSERT INTO messages (thread_id, sender_id, recipient_id, body)
-             VALUES ($1, $2, $3, $4);`,
-            {
-                bind: [thread_id, sender_id, recipient_id, encryptedBody]
-            }
-        );
+    case 'NOT_THREAD_MEMBER':
+      return res.status(403).json({
+        success: false,
+        error: error.message,
+      });
 
-        // Create notification for message received
-        try {
-            await notificationService.createNotification({
-                userId: recipient_id,
-                type: 'message_received',
-                title: 'New Message',
-                message: `You received a new message.`,
-                link: `/messages`,
-                metadata: {
-                    sender_id: sender_id,
-                    thread_id: thread_id,
-                    preview: body.substring(0, 50)
-                }
-            });
-        } catch (notifError) {
-            console.error('Failed to create message notification:', notifError);
-        }
+    case 'THREAD_NOT_FOUND':
+      return res.status(404).json({
+        success: false,
+        error: error.message,
+      });
 
-        res.json({ success: true, message: "Encrypted message saved." });
-    } catch (err) {
-        console.error("SEND ERROR:", err);
-        res.status(500).json({ error: "Failed to send message" });
-    }
+    case 'PARTICIPANT_ALREADY_EXISTS':
+      return res.status(409).json({
+        success: false,
+        error: error.message,
+      });
+
+    case 'MSG_SECRET_MISSING':
+      return res.status(500).json({
+        success: false,
+        error: error.message,
+      });
+
+    default:
+      return res.status(500).json({
+        success: false,
+        error: 'INTERNAL_SERVER_ERROR',
+      });
+  }
+}
+
+router.use(authenticate);
+
+// Create or get direct thread
+router.post('/threads/direct', async (req, res) => {
+  try {
+    const { otherUserId, isSensitive } = req.body;
+
+    const thread = await messageService.getOrCreateDirectThread(
+      req.user.id,
+      otherUserId,
+      { isSensitive }
+    );
+
+    return res.status(200).json({
+      success: true,
+      thread,
+    });
+  } catch (error) {
+    return handleServiceError(res, error);
+  }
 });
 
-// GET MESSAGE THREAD (decrypt before sending)
-router.get("/thread/:threadId", authenticate, async (req, res) => {
-    try {
-        const { threadId } = req.params;
+// Create group thread
+router.post('/threads/group', async (req, res) => {
+  try {
+    const { participantIds, name, projectId, nonprofitId, isSensitive } = req.body;
 
-        const [rows] = await sequelize.query(
-                        `SELECT *
-                         FROM messages
-                         WHERE thread_id = $1
-                             AND (sender_id = $2 OR recipient_id = $2)
-                         ORDER BY created_at ASC`,
-                        { bind: [threadId, req.user.id] }
-        );
+    const thread = await messageService.createGroupThread({
+      creatorId: req.user.id,
+      participantIds,
+      name,
+      projectId,
+      nonprofitId,
+      isSensitive,
+    });
 
-        const key = process.env.MSG_SECRET;
-
-        const messages = rows.map(row => ({
-            id: row.id,
-            sender_id: row.sender_id,
-            recipient_id: row.recipient_id,
-            created_at: row.created_at,
-            body: decryptMessage(row.body, key),
-            attachments: row.attachments
-        }));
-
-        res.json({ success: true, messages });
-    } catch (err) {
-        console.error("FETCH ERROR:", err);
-        res.status(500).json({ error: "Failed to load messages" });
-    }
+    return res.status(201).json({
+      success: true,
+      thread,
+    });
+  } catch (error) {
+    return handleServiceError(res, error);
+  }
 });
 
-// ADMIN MESSAGE RETRIEVAL
-router.get("/admin/thread/:threadId", authenticate, requireAdmin, async (req, res) => {
-    try {
-        const { threadId } = req.params;
+// Get all threads for current user
+router.get('/threads', async (req, res) => {
+  try {
+    const threads = await messageService.getUserThreads(req.user.id);
 
-        const [rows] = await sequelize.query(
-            "SELECT * FROM messages WHERE thread_id = $1 ORDER BY created_at ASC",
-            { bind: [threadId] }
-        );
+    return res.status(200).json({
+      success: true,
+      threads,
+    });
+  } catch (error) {
+    return handleServiceError(res, error);
+  }
+});
 
-        const messages = rows.map(r => ({
-            ...r,
-            body: decryptMessage(r.body, process.env.MSG_SECRET)
-        }));
+// Add participant to group thread
+router.post('/threads/:threadId/participants', async (req, res) => {
+  try {
+    const { threadId } = req.params;
+    const { userIdToAdd } = req.body;
 
-        res.json({ success: true, messages });
-    } catch (err) {
-        console.error("ADMIN FETCH ERROR:", err);
-        res.status(500).json({ error: "Failed to load admin thread messages" });
-    }
+    const participant = await messageService.addParticipantToThread({
+      actorId: req.user.id,
+      threadId,
+      userIdToAdd,
+    });
+
+    return res.status(201).json({
+      success: true,
+      participant,
+    });
+  } catch (error) {
+    return handleServiceError(res, error);
+  }
+});
+
+// Send message
+router.post('/threads/:threadId/messages', async (req, res) => {
+  try {
+    const { threadId } = req.params;
+    const { body, attachments } = req.body;
+
+    const message = await messageService.sendMessage({
+      threadId,
+      senderId: req.user.id,
+      body,
+      attachments,
+    });
+
+    return res.status(201).json({
+      success: true,
+      message,
+    });
+  } catch (error) {
+    return handleServiceError(res, error);
+  }
+});
+
+// Get messages in thread
+router.get('/threads/:threadId/messages', async (req, res) => {
+  try {
+    const { threadId } = req.params;
+    const { limit } = req.query;
+
+    const messages = await messageService.getThreadMessages({
+      threadId,
+      userId: req.user.id,
+      limit,
+    });
+
+    return res.status(200).json({
+      success: true,
+      messages,
+    });
+  } catch (error) {
+    return handleServiceError(res, error);
+  }
+});
+
+// Mark thread read
+router.post('/threads/:threadId/read', async (req, res) => {
+  try {
+    const { threadId } = req.params;
+
+    const membership = await messageService.markThreadRead({
+      threadId,
+      userId: req.user.id,
+    });
+
+    return res.status(200).json({
+      success: true,
+      membership,
+    });
+  } catch (error) {
+    return handleServiceError(res, error);
+  }
+});
+
+// Get unread total
+router.get('/unread', async (req, res) => {
+  try {
+    const unreadTotal = await messageService.getUnreadTotal(req.user.id);
+
+    return res.status(200).json({
+      success: true,
+      unreadTotal,
+    });
+  } catch (error) {
+    return handleServiceError(res, error);
+  }
 });
 
 module.exports = router;
-
