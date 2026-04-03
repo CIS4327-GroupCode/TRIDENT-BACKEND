@@ -45,6 +45,10 @@ Thread.init(
       allowNull: false,
       defaultValue: DataTypes.NOW,
     },
+     last_message_at: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
   },
   {
     sequelize,

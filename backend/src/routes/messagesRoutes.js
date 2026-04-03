@@ -1,9 +1,10 @@
 const express = require('express');
 const router = express.Router();
-
+const multer = require('multer');
+const path = require('path');
 
 const messageService = require('../services/messageService');
-const { authenticate } = require('../middleware/auth'); // adjust if your export is different
+const { authenticate } = require('../middleware/auth');
 
 function handleServiceError(res, error) {
   console.error(error);
@@ -17,6 +18,7 @@ function handleServiceError(res, error) {
     case 'INVALID_THREAD_OR_SENDER':
     case 'MESSAGE_OR_ATTACHMENT_REQUIRED':
     case 'ONLY_GROUP_THREADS_CAN_ADD_PARTICIPANTS':
+    case 'USER_NOT_FOUND':
       return res.status(400).json({
         success: false,
         error: error.message,
@@ -54,22 +56,59 @@ function handleServiceError(res, error) {
   }
 }
 
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    cb(null, path.join(process.cwd(), 'uploads'));
+  },
+  filename: function (req, file, cb) {
+    const safeOriginalName = file.originalname.replace(/\s+/g, '_');
+    const uniqueName = `${Date.now()}-${safeOriginalName}`;
+    cb(null, uniqueName);
+  },
+});
+
+const upload = multer({ storage });
+
 router.use(authenticate);
+
+// Upload a file for later message attachment
+router.post('/upload', upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        error: 'NO_FILE_UPLOADED',
+      });
+    }
+
+    return res.status(201).json({
+      success: true,
+      file_name: req.file.originalname,
+      file_url: `/uploads/${req.file.filename}`,
+    });
+  } catch (error) {
+    console.error('UPLOAD ERROR:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'UPLOAD_FAILED',
+    });
+  }
+});
 
 // Create or get direct thread
 router.post('/threads/direct', async (req, res) => {
   try {
-    const { otherUserId, isSensitive } = req.body;
+    const { otherUserId, isSensitive = false } = req.body;
 
-    const thread = await messageService.getOrCreateDirectThread(
-      req.user.id,
+    const result = await messageService.createDirectThread({
+      creatorId: req.user.id,
       otherUserId,
-      { isSensitive }
-    );
+      isSensitive,
+    });
 
-    return res.status(200).json({
+    return res.status(201).json({
       success: true,
-      thread,
+      ...result,
     });
   } catch (error) {
     return handleServiceError(res, error);
@@ -79,20 +118,22 @@ router.post('/threads/direct', async (req, res) => {
 // Create group thread
 router.post('/threads/group', async (req, res) => {
   try {
-    const { participantIds, name, projectId, nonprofitId, isSensitive } = req.body;
-
-    const thread = await messageService.createGroupThread({
-      creatorId: req.user.id,
-      participantIds,
+    const {
       name,
-      projectId,
-      nonprofitId,
+      participantIds = [],
+      isSensitive = false,
+    } = req.body;
+
+    const result = await messageService.createGroupThread({
+      creatorId: req.user.id,
+      name,
+      participantIds,
       isSensitive,
     });
 
     return res.status(201).json({
       success: true,
-      thread,
+      ...result,
     });
   } catch (error) {
     return handleServiceError(res, error);
@@ -113,34 +154,13 @@ router.get('/threads', async (req, res) => {
   }
 });
 
-// Add participant to group thread
-router.post('/threads/:threadId/participants', async (req, res) => {
-  try {
-    const { threadId } = req.params;
-    const { userIdToAdd } = req.body;
-
-    const participant = await messageService.addParticipantToThread({
-      actorId: req.user.id,
-      threadId,
-      userIdToAdd,
-    });
-
-    return res.status(201).json({
-      success: true,
-      participant,
-    });
-  } catch (error) {
-    return handleServiceError(res, error);
-  }
-});
-
 // Send message
 router.post('/threads/:threadId/messages', async (req, res) => {
   try {
     const { threadId } = req.params;
-    const { body, attachments } = req.body;
+    const { body, attachments = [] } = req.body;
 
-    const message = await messageService.sendMessage({
+    const result = await messageService.sendMessage({
       threadId,
       senderId: req.user.id,
       body,
@@ -149,28 +169,29 @@ router.post('/threads/:threadId/messages', async (req, res) => {
 
     return res.status(201).json({
       success: true,
-      message,
+      ...result,
     });
   } catch (error) {
     return handleServiceError(res, error);
   }
 });
 
-// Get messages in thread
+// Get paginated messages in thread
 router.get('/threads/:threadId/messages', async (req, res) => {
   try {
     const { threadId } = req.params;
-    const { limit } = req.query;
+    const { limit, before = null } = req.query;
 
-    const messages = await messageService.getThreadMessages({
+    const result = await messageService.getThreadMessages({
       threadId,
       userId: req.user.id,
       limit,
+      before,
     });
 
     return res.status(200).json({
       success: true,
-      messages,
+      ...result,
     });
   } catch (error) {
     return handleServiceError(res, error);
@@ -182,14 +203,14 @@ router.post('/threads/:threadId/read', async (req, res) => {
   try {
     const { threadId } = req.params;
 
-    const membership = await messageService.markThreadRead({
+    const result = await messageService.markThreadRead(
       threadId,
-      userId: req.user.id,
-    });
+      req.user.id
+    );
 
     return res.status(200).json({
       success: true,
-      membership,
+      ...result,
     });
   } catch (error) {
     return handleServiceError(res, error);
@@ -199,11 +220,11 @@ router.post('/threads/:threadId/read', async (req, res) => {
 // Get unread total
 router.get('/unread', async (req, res) => {
   try {
-    const unreadTotal = await messageService.getUnreadTotal(req.user.id);
+    const result = await messageService.getUnreadTotal(req.user.id);
 
     return res.status(200).json({
       success: true,
-      unreadTotal,
+      ...result,
     });
   } catch (error) {
     return handleServiceError(res, error);

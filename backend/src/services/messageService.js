@@ -9,35 +9,91 @@ const {
 } = require('../database/models');
 const { encryptMessage, decryptMessage } = require('../utils/encryption');
 
-function buildDirectKey(userId1, userId2) {
-  const [a, b] = [Number(userId1), Number(userId2)].sort((x, y) => x - y);
-  return `${a}:${b}`;
+function safeDecrypt(body) {
+  if (!process.env.MSG_SECRET) {
+    throw new Error('MSG_SECRET_MISSING');
+  }
+
+  if (typeof body !== 'string' || body.trim() === '') {
+    return '';
+  }
+
+  try {
+    return decryptMessage(body, process.env.MSG_SECRET);
+  } catch (err) {
+    console.warn('Decrypt failed, fallback to plain text');
+    return body;
+  }
+}
+
+function getAvailableUserColumns() {
+  try {
+    const attributes = User.getAttributes ? User.getAttributes() : User.rawAttributes || {};
+    return Object.keys(attributes);
+  } catch (err) {
+    return [];
+  }
+}
+
+function getSelectableUserAttributes() {
+  const availableColumns = getAvailableUserColumns();
+  const selected = ['id'];
+
+  for (const column of ['name', 'email', 'role', 'first_name', 'last_name']) {
+    if (availableColumns.includes(column)) {
+      selected.push(column);
+    }
+  }
+
+  return selected;
+}
+
+function getUserDisplayName(user) {
+  if (!user) return 'Unknown User';
+
+  const firstName = typeof user.first_name === 'string' ? user.first_name.trim() : '';
+  const lastName = typeof user.last_name === 'string' ? user.last_name.trim() : '';
+  const fullName = [firstName, lastName].filter(Boolean).join(' ').trim();
+
+  if (typeof user.name === 'string' && user.name.trim()) return user.name.trim();
+  if (fullName) return fullName;
+  if (typeof user.email === 'string' && user.email.trim()) return user.email.trim();
+
+  return `User #${user.id}`;
 }
 
 async function isUserInThread(threadId, userId) {
-  const membership = await ThreadParticipant.findOne({
+  const normalizedThreadId = Number(threadId);
+  const normalizedUserId = Number(userId);
+
+  if (!normalizedThreadId || !normalizedUserId) {
+    return false;
+  }
+
+  const participant = await ThreadParticipant.findOne({
     where: {
-      thread_id: Number(threadId),
-      user_id: Number(userId),
+      thread_id: normalizedThreadId,
+      user_id: normalizedUserId,
     },
   });
 
-  return !!membership;
+  return !!participant;
 }
 
-async function getOrCreateDirectThread(currentUserId, otherUserId, options = {}) {
-  const userA = Number(currentUserId);
-  const userB = Number(otherUserId);
+async function getOrCreateDirectThread({ userAId, userBId, isSensitive = false }) {
+  const normalizedUserAId = Number(userAId);
+  const normalizedUserBId = Number(userBId);
 
-  if (!userA || !userB) {
+  if (!normalizedUserAId || !normalizedUserBId) {
     throw new Error('INVALID_USER_IDS');
   }
 
-  if (userA === userB) {
+  if (normalizedUserAId === normalizedUserBId) {
     throw new Error('CANNOT_MESSAGE_SELF');
   }
 
-  const directKey = buildDirectKey(userA, userB);
+  const sortedIds = [normalizedUserAId, normalizedUserBId].sort((a, b) => a - b);
+  const directKey = `${sortedIds[0]}:${sortedIds[1]}`;
 
   let thread = await Thread.findOne({
     where: {
@@ -56,8 +112,9 @@ async function getOrCreateDirectThread(currentUserId, otherUserId, options = {})
         thread_type: 'direct',
         direct_key: directKey,
         name: null,
-        is_sensitive: !!options.isSensitive,
-        created_by: userA,
+        created_by: normalizedUserAId,
+        is_sensitive: Boolean(isSensitive),
+        last_message_at: null,
       },
       { transaction }
     );
@@ -66,13 +123,17 @@ async function getOrCreateDirectThread(currentUserId, otherUserId, options = {})
       [
         {
           thread_id: thread.id,
-          user_id: userA,
+          user_id: normalizedUserAId,
           unread_count: 0,
+          last_read_message_id: null,
+          joined_at: new Date(),
         },
         {
           thread_id: thread.id,
-          user_id: userB,
+          user_id: normalizedUserBId,
           unread_count: 0,
+          last_read_message_id: null,
+          joined_at: new Date(),
         },
       ],
       { transaction }
@@ -82,26 +143,72 @@ async function getOrCreateDirectThread(currentUserId, otherUserId, options = {})
   });
 }
 
-async function createGroupThread({
-  creatorId,
-  participantIds = [],
-  name = null,
-  projectId = null,
-  nonprofitId = null,
-  isSensitive = false,
-}) {
-  const creator = Number(creatorId);
+async function createDirectThread({ creatorId, otherUserId, isSensitive = false }) {
+  const normalizedCreatorId = Number(creatorId);
+  const normalizedOtherUserId = Number(otherUserId);
 
-  if (!creator) {
+  if (!normalizedCreatorId || !normalizedOtherUserId) {
+    throw new Error('INVALID_USER_IDS');
+  }
+
+  const otherUser = await User.findByPk(normalizedOtherUserId, {
+    attributes: getSelectableUserAttributes(),
+  });
+
+  if (!otherUser) {
+    throw new Error('USER_NOT_FOUND');
+  }
+
+  const thread = await getOrCreateDirectThread({
+    userAId: normalizedCreatorId,
+    userBId: normalizedOtherUserId,
+    isSensitive,
+  });
+
+  return {
+    thread: {
+      id: thread.id,
+      thread_type: thread.thread_type,
+      name: thread.name,
+      display_name: getUserDisplayName(otherUser),
+      project_id: thread.project_id,
+      nonprofit_id: thread.nonprofit_id,
+      is_sensitive: thread.is_sensitive,
+      last_message_at: thread.last_message_at,
+    },
+  };
+}
+
+async function createGroupThread({ creatorId, name, participantIds = [], isSensitive = false }) {
+  const normalizedCreatorId = Number(creatorId);
+  const safeName = typeof name === 'string' ? name.trim() : '';
+
+  if (!normalizedCreatorId) {
     throw new Error('CREATOR_ID_REQUIRED');
   }
 
-  const uniqueParticipantIds = [
-    ...new Set([creator, ...participantIds.map(Number).filter(Boolean)]),
-  ];
+  const normalizedParticipantIds = Array.from(
+    new Set(
+      (Array.isArray(participantIds) ? participantIds : [])
+        .map((id) => Number(id))
+        .filter(Boolean)
+        .filter((id) => id !== normalizedCreatorId)
+    )
+  );
 
-  if (uniqueParticipantIds.length < 2) {
+  if (normalizedParticipantIds.length < 2) {
     throw new Error('GROUP_NEEDS_AT_LEAST_2_PARTICIPANTS');
+  }
+
+  const foundUsers = await User.findAll({
+    where: {
+      id: normalizedParticipantIds,
+    },
+    attributes: ['id'],
+  });
+
+  if (foundUsers.length !== normalizedParticipantIds.length) {
+    throw new Error('USER_NOT_FOUND');
   }
 
   return sequelize.transaction(async (transaction) => {
@@ -109,36 +216,168 @@ async function createGroupThread({
       {
         thread_type: 'group',
         direct_key: null,
-        project_id: projectId,
-        nonprofit_id: nonprofitId,
-        name,
-        is_sensitive: !!isSensitive,
-        created_by: creator,
+        name: safeName || null,
+        created_by: normalizedCreatorId,
+        is_sensitive: Boolean(isSensitive),
+        last_message_at: null,
       },
       { transaction }
     );
 
+    const allParticipantIds = [normalizedCreatorId, ...normalizedParticipantIds];
+
     await ThreadParticipant.bulkCreate(
-      uniqueParticipantIds.map((userId) => ({
+      allParticipantIds.map((userId) => ({
         thread_id: thread.id,
         user_id: userId,
         unread_count: 0,
+        last_read_message_id: null,
+        joined_at: new Date(),
       })),
       { transaction }
     );
 
-    return thread;
+    return {
+      thread: {
+        id: thread.id,
+        thread_type: thread.thread_type,
+        name: thread.name,
+        display_name: thread.name || `Group #${thread.id}`,
+        project_id: thread.project_id,
+        nonprofit_id: thread.nonprofit_id,
+        is_sensitive: thread.is_sensitive,
+        last_message_at: thread.last_message_at,
+      },
+    };
   });
 }
 
-async function addParticipantToThread({ actorId, threadId, userIdToAdd }) {
-  const normalizedActorId = Number(actorId);
-  const normalizedThreadId = Number(threadId);
-  const normalizedUserIdToAdd = Number(userIdToAdd);
+async function getUserThreads(userId) {
+  const normalizedUserId = Number(userId);
 
-  if (!normalizedActorId || !normalizedThreadId || !normalizedUserIdToAdd) {
-    throw new Error('INVALID_INPUT');
+  const memberships = await ThreadParticipant.findAll({
+    where: { user_id: normalizedUserId },
+    include: [
+      {
+        model: Thread,
+        as: 'thread',
+      },
+    ],
+    order: [[{ model: Thread, as: 'thread' }, 'last_message_at', 'DESC']],
+  });
+
+  if (memberships.length === 0) {
+    return [];
   }
+
+  const threadIds = memberships.map((membership) => membership.thread.id);
+
+  const lastMessages = await Message.findAll({
+    where: {
+      thread_id: threadIds,
+      id: {
+        [Op.in]: sequelize.literal(`
+          (
+            SELECT MAX(m2.id)
+            FROM messages m2
+            WHERE m2.thread_id = "Message".thread_id
+          )
+        `),
+      },
+    },
+    order: [['created_at', 'DESC']],
+  });
+
+  const lastMessageMap = new Map();
+
+  for (const msg of lastMessages) {
+    lastMessageMap.set(msg.thread_id, {
+      id: msg.id,
+      sender_id: msg.sender_id,
+      body: safeDecrypt(msg.body),
+      created_at: msg.created_at,
+    });
+  }
+
+  const directThreadIds = memberships
+    .filter((membership) => membership.thread.thread_type === 'direct')
+    .map((membership) => membership.thread.id);
+
+  const participantRows = directThreadIds.length > 0
+    ? await ThreadParticipant.findAll({
+        where: {
+          thread_id: directThreadIds,
+        },
+        attributes: ['thread_id', 'user_id'],
+      })
+    : [];
+
+  const directOtherUserIds = Array.from(
+    new Set(
+      participantRows
+        .filter((row) => Number(row.user_id) !== normalizedUserId)
+        .map((row) => Number(row.user_id))
+    )
+  );
+
+  const otherUsers = directOtherUserIds.length > 0
+    ? await User.findAll({
+        where: {
+          id: directOtherUserIds,
+        },
+        attributes: getSelectableUserAttributes(),
+      })
+    : [];
+
+  const userMap = new Map();
+  for (const user of otherUsers) {
+    userMap.set(Number(user.id), getUserDisplayName(user));
+  }
+
+  const directDisplayNameMap = new Map();
+  for (const row of participantRows) {
+    const threadId = Number(row.thread_id);
+    const participantUserId = Number(row.user_id);
+
+    if (participantUserId === normalizedUserId) continue;
+
+    if (!directDisplayNameMap.has(threadId)) {
+      directDisplayNameMap.set(
+        threadId,
+        userMap.get(participantUserId) || `User #${participantUserId}`
+      );
+    }
+  }
+
+  return memberships.map((membership) => {
+    const thread = membership.thread;
+    const isDirect = thread.thread_type === 'direct';
+
+    const displayName = isDirect
+      ? directDisplayNameMap.get(thread.id) || thread.name || `Direct chat #${thread.id}`
+      : thread.name || `Group #${thread.id}`;
+
+    return {
+      id: thread.id,
+      thread_type: thread.thread_type,
+      name: thread.name,
+      display_name: displayName,
+      project_id: thread.project_id,
+      nonprofit_id: thread.nonprofit_id,
+      is_sensitive: thread.is_sensitive,
+      unread_count: membership.unread_count,
+      last_read_message_id: membership.last_read_message_id,
+      joined_at: membership.joined_at,
+      last_message_at: thread.last_message_at,
+      last_message: lastMessageMap.get(thread.id) || null,
+    };
+  });
+}
+
+async function getThreadMessages({ threadId, userId, limit = 50, before = null }) {
+  const normalizedThreadId = Number(threadId);
+  const normalizedUserId = Number(userId);
+  const safeLimit = Math.min(Math.max(Number(limit) || 50, 1), 100);
 
   const thread = await Thread.findByPk(normalizedThreadId);
 
@@ -146,32 +385,75 @@ async function addParticipantToThread({ actorId, threadId, userIdToAdd }) {
     throw new Error('THREAD_NOT_FOUND');
   }
 
-  const actorIsParticipant = await isUserInThread(normalizedThreadId, normalizedActorId);
+  const allowed = await isUserInThread(normalizedThreadId, normalizedUserId);
 
-  if (!actorIsParticipant) {
+  if (!allowed) {
     throw new Error('NOT_THREAD_MEMBER');
   }
 
-  if (thread.thread_type !== 'group') {
-    throw new Error('ONLY_GROUP_THREADS_CAN_ADD_PARTICIPANTS');
-  }
-
-  const existing = await ThreadParticipant.findOne({
-    where: {
-      thread_id: normalizedThreadId,
-      user_id: normalizedUserIdToAdd,
-    },
-  });
-
-  if (existing) {
-    throw new Error('PARTICIPANT_ALREADY_EXISTS');
-  }
-
-  return ThreadParticipant.create({
+  const where = {
     thread_id: normalizedThreadId,
-    user_id: normalizedUserIdToAdd,
-    unread_count: 0,
+  };
+
+  if (before) {
+    where.created_at = {
+      [Op.lt]: new Date(before),
+    };
+  }
+
+  const messages = await Message.findAll({
+    where,
+    include: [
+      {
+        model: User,
+        as: 'sender',
+        attributes: getSelectableUserAttributes(),
+      },
+      {
+        model: MessageAttachment,
+        as: 'attachments',
+        attributes: [
+          'id',
+          'message_id',
+          'file_name',
+          'file_url',
+          'created_at',
+        ],
+      },
+    ],
+    order: [['created_at', 'DESC']],
+    limit: safeLimit,
   });
+
+  const normalizedMessages = messages
+    .slice()
+    .reverse()
+    .map((message) => ({
+      id: message.id,
+      thread_id: message.thread_id,
+      sender_id: message.sender_id,
+      body: safeDecrypt(message.body),
+      created_at: message.created_at,
+      sender: message.sender
+        ? {
+            id: message.sender.id,
+            name: getUserDisplayName(message.sender),
+            email: message.sender.email || '',
+            role: message.sender.role || null,
+          }
+        : null,
+      attachments: message.attachments || [],
+    }));
+
+  const nextCursor =
+    messages.length === safeLimit
+      ? messages[messages.length - 1].created_at
+      : null;
+
+  return {
+    messages: normalizedMessages,
+    nextCursor,
+  };
 }
 
 async function sendMessage({ threadId, senderId, body, attachments = [] }) {
@@ -183,7 +465,7 @@ async function sendMessage({ threadId, senderId, body, attachments = [] }) {
     throw new Error('INVALID_THREAD_OR_SENDER');
   }
 
-  const trimmedBody = body ? body.trim() : '';
+  const trimmedBody = typeof body === 'string' ? body.trim() : '';
 
   if (!trimmedBody && safeAttachments.length === 0) {
     throw new Error('MESSAGE_OR_ATTACHMENT_REQUIRED');
@@ -210,7 +492,7 @@ async function sendMessage({ threadId, senderId, body, attachments = [] }) {
     : '';
 
   return sequelize.transaction(async (transaction) => {
-    const message = await Message.create(
+    const createdMessage = await Message.create(
       {
         thread_id: normalizedThreadId,
         sender_id: normalizedSenderId,
@@ -219,19 +501,27 @@ async function sendMessage({ threadId, senderId, body, attachments = [] }) {
       { transaction }
     );
 
+    await Thread.update(
+      { last_message_at: createdMessage.created_at },
+      {
+        where: { id: normalizedThreadId },
+        transaction,
+      }
+    );
+
     let createdAttachments = [];
 
     if (safeAttachments.length > 0) {
       createdAttachments = await MessageAttachment.bulkCreate(
         safeAttachments.map((file) => ({
-          message_id: message.id,
+          message_id: createdMessage.id,
           file_name: file.file_name,
-          storage_key: file.storage_key,
           file_url: file.file_url || null,
-          mime_type: file.mime_type || null,
-          file_size: file.file_size || null,
         })),
-        { transaction }
+        {
+          transaction,
+          returning: true,
+        }
       );
     }
 
@@ -248,7 +538,8 @@ async function sendMessage({ threadId, senderId, body, attachments = [] }) {
 
     await ThreadParticipant.update(
       {
-        last_read_message_id: message.id,
+        last_read_message_id: createdMessage.id,
+        unread_count: 0,
       },
       {
         where: {
@@ -260,35 +551,27 @@ async function sendMessage({ threadId, senderId, body, attachments = [] }) {
     );
 
     return {
-      id: message.id,
-      thread_id: message.thread_id,
-      sender_id: message.sender_id,
-      body: trimmedBody,
-      created_at: message.created_at,
-      attachments: createdAttachments.map((file) => ({
-        id: file.id,
-        message_id: file.message_id,
-        file_name: file.file_name,
-        storage_key: file.storage_key,
-        file_url: file.file_url,
-        mime_type: file.mime_type,
-        file_size: file.file_size,
-        uploaded_at: file.uploaded_at,
-      })),
+      message: {
+        id: createdMessage.id,
+        thread_id: createdMessage.thread_id,
+        sender_id: createdMessage.sender_id,
+        body: trimmedBody,
+        created_at: createdMessage.created_at,
+        attachments: createdAttachments.map((file) => ({
+          id: file.id,
+          message_id: file.message_id,
+          file_name: file.file_name,
+          file_url: file.file_url,
+          created_at: file.created_at,
+        })),
+      },
     };
   });
 }
 
-async function getThreadMessages({ threadId, userId, limit = 50 }) {
+async function markThreadRead(threadId, userId) {
   const normalizedThreadId = Number(threadId);
   const normalizedUserId = Number(userId);
-  const safeLimit = Math.min(Math.max(Number(limit) || 50, 1), 100);
-
-  const thread = await Thread.findByPk(normalizedThreadId);
-
-  if (!thread) {
-    throw new Error('THREAD_NOT_FOUND');
-  }
 
   const allowed = await isUserInThread(normalizedThreadId, normalizedUserId);
 
@@ -296,156 +579,47 @@ async function getThreadMessages({ threadId, userId, limit = 50 }) {
     throw new Error('NOT_THREAD_MEMBER');
   }
 
-  if (!process.env.MSG_SECRET) {
-    throw new Error('MSG_SECRET_MISSING');
-  }
-
-  const messages = await Message.findAll({
-    where: { thread_id: normalizedThreadId },
-    include: [
-      {
-        model: User,
-        as: 'sender',
-        attributes: ['id', 'email', 'role'],
-      },
-      {
-        model: MessageAttachment,
-        as: 'attachments',
-        attributes: [
-          'id',
-          'message_id',
-          'file_name',
-          'storage_key',
-          'file_url',
-          'mime_type',
-          'file_size',
-          'uploaded_at',
-        ],
-      },
-    ],
-    order: [['created_at', 'DESC']],
-    limit: safeLimit,
-  });
-
-  return messages.reverse().map((message) => ({
-    id: message.id,
-    thread_id: message.thread_id,
-    sender_id: message.sender_id,
-    body: message.body ? decryptMessage(message.body, process.env.MSG_SECRET) : '',
-    created_at: message.created_at,
-    sender: message.sender,
-    attachments: message.attachments || [],
-  }));
-}
-
-async function markThreadRead({ threadId, userId }) {
-  const normalizedThreadId = Number(threadId);
-  const normalizedUserId = Number(userId);
-
-  const thread = await Thread.findByPk(normalizedThreadId);
-
-  if (!thread) {
-    throw new Error('THREAD_NOT_FOUND');
-  }
-
-  const membership = await ThreadParticipant.findOne({
-    where: {
-      thread_id: normalizedThreadId,
-      user_id: normalizedUserId,
-    },
-  });
-
-  if (!membership) {
-    throw new Error('NOT_THREAD_MEMBER');
-  }
-
   const latestMessage = await Message.findOne({
     where: { thread_id: normalizedThreadId },
-    order: [['id', 'DESC']],
+    order: [['created_at', 'DESC']],
   });
 
-  membership.unread_count = 0;
-  membership.last_read_message_id = latestMessage ? latestMessage.id : null;
-  await membership.save();
+  await ThreadParticipant.update(
+    {
+      unread_count: 0,
+      last_read_message_id: latestMessage ? latestMessage.id : null,
+    },
+    {
+      where: {
+        thread_id: normalizedThreadId,
+        user_id: normalizedUserId,
+      },
+    }
+  );
 
-  return membership;
+  return { success: true };
 }
 
 async function getUnreadTotal(userId) {
-  const total = await ThreadParticipant.sum('unread_count', {
-    where: {
-      user_id: Number(userId),
-    },
-  });
-
-  return total || 0;
-}
-
-async function getUserThreads(userId) {
   const normalizedUserId = Number(userId);
 
-  const memberships = await ThreadParticipant.findAll({
+  const total = await ThreadParticipant.sum('unread_count', {
     where: { user_id: normalizedUserId },
-    include: [
-      {
-        model: Thread,
-        as: 'thread',
-      },
-    ],
-    order: [['joined_at', 'DESC']],
   });
 
-  const threadsWithDetails = await Promise.all(
-    memberships.map(async (membership) => {
-      const lastMessage = await Message.findOne({
-        where: { thread_id: membership.thread.id },
-        order: [['created_at', 'DESC']],
-      });
-
-      let lastMessagePreview = null;
-
-      if (lastMessage && process.env.MSG_SECRET) {
-        try {
-          lastMessagePreview = decryptMessage(lastMessage.body, process.env.MSG_SECRET);
-        } catch (err) {
-          lastMessagePreview = '[Unable to decrypt message preview]';
-        }
-      }
-
-      return {
-        id: membership.thread.id,
-        thread_type: membership.thread.thread_type,
-        name: membership.thread.name,
-        project_id: membership.thread.project_id,
-        nonprofit_id: membership.thread.nonprofit_id,
-        is_sensitive: membership.thread.is_sensitive,
-        unread_count: membership.unread_count,
-        last_read_message_id: membership.last_read_message_id,
-        joined_at: membership.joined_at,
-        last_message: lastMessage
-          ? {
-              id: lastMessage.id,
-              sender_id: lastMessage.sender_id,
-              body: lastMessagePreview,
-              created_at: lastMessage.created_at,
-            }
-          : null,
-      };
-    })
-  );
-
-  return threadsWithDetails;
+  return {
+    unreadTotal: total || 0,
+  };
 }
 
 module.exports = {
-  buildDirectKey,
   isUserInThread,
   getOrCreateDirectThread,
+  createDirectThread,
   createGroupThread,
-  addParticipantToThread,
-  sendMessage,
+  getUserThreads,
   getThreadMessages,
+  sendMessage,
   markThreadRead,
   getUnreadTotal,
-  getUserThreads,
 };

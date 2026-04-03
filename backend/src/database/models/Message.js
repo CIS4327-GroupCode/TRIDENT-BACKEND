@@ -9,6 +9,7 @@ Message.init(
       type: DataTypes.INTEGER,
       primaryKey: true,
       autoIncrement: true,
+      allowNull: false,
     },
     thread_id: {
       type: DataTypes.INTEGER,
@@ -17,10 +18,17 @@ Message.init(
         model: 'threads',
         key: 'id',
       },
+      onDelete: 'CASCADE',
     },
     sender_id: {
       type: DataTypes.INTEGER,
       allowNull: false,
+      references: {
+        model: '_user',
+        key: 'id',
+      },
+      onUpdate: 'CASCADE',
+      onDelete: 'CASCADE',
     },
     body: {
       type: DataTypes.TEXT,
