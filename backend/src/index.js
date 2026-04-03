@@ -1,13 +1,12 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const path = require('path');
 
 const db = require('./db');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const sequelize = require('./database');
-
-const messagesRouter = require('./messages');
 
 const app = express();
 
@@ -49,6 +48,10 @@ app.use(cors({
 
 app.use(express.json());
 
+// Serve uploaded files
+app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
+app.use('/api/uploads', express.static(path.join(process.cwd(), 'uploads')));
+
 // Handle OPTIONS requests explicitly for CORS preflight
 app.options('*', cors());
 
@@ -82,6 +85,7 @@ const notificationRoutes = require('./routes/notificationRoutes');
 const applicationRoutes = require('./routes/applicationRoutes');
 const matchRoutes = require('./routes/matchRoutes');
 const agreementRoutes = require('./routes/agreementRoutes');
+const adminChatAuditRoutes = require('./routes/adminChatAuditRoutes');
 
 //home route just to check if server is running
 app.get('/', (req, res) => {
@@ -100,6 +104,7 @@ app.use('/api/notifications', notificationRoutes);
 app.use('/api/applications', applicationRoutes);
 app.use('/api/matches', matchRoutes);
 app.use('/api/agreements', agreementRoutes);
+app.use('/api/admin/chat-audit', adminChatAuditRoutes);
 
 // 404 handler for undefined routes
 app.use((req, res) => {

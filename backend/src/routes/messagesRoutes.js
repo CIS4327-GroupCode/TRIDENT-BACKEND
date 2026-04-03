@@ -1,111 +1,234 @@
-const express = require("express");
+const express = require('express');
 const router = express.Router();
-const { encryptMessage, decryptMessage } = require("../utils/encryption");
-const sequelize = require("../database"); // your existing DB connection
-const notificationService = require("../services/notificationService");
-const { authenticate, requireAdmin } = require("../middleware/auth");
+const multer = require('multer');
+const path = require('path');
 
-// SEND MESSAGE (encrypt before storing)
-router.post("/send", authenticate, async (req, res) => {
-    try {
-        const { thread_id, sender_id, recipient_id, body } = req.body;
+const messageService = require('../services/messageService');
+const { authenticate } = require('../middleware/auth');
 
-        if (!thread_id || !sender_id || !recipient_id || !body) {
-            return res.status(400).json({ error: "thread_id, sender_id, recipient_id, and body are required" });
-        }
+function handleServiceError(res, error) {
+  console.error(error);
 
-        if (Number(sender_id) !== Number(req.user.id)) {
-            return res.status(403).json({ error: "sender_id must match authenticated user" });
-        }
+  switch (error.message) {
+    case 'INVALID_USER_IDS':
+    case 'CANNOT_MESSAGE_SELF':
+    case 'CREATOR_ID_REQUIRED':
+    case 'GROUP_NEEDS_AT_LEAST_2_PARTICIPANTS':
+    case 'INVALID_INPUT':
+    case 'INVALID_THREAD_OR_SENDER':
+    case 'MESSAGE_OR_ATTACHMENT_REQUIRED':
+    case 'ONLY_GROUP_THREADS_CAN_ADD_PARTICIPANTS':
+    case 'USER_NOT_FOUND':
+      return res.status(400).json({
+        success: false,
+        error: error.message,
+      });
 
-        const encryptedBody = encryptMessage(body, process.env.MSG_SECRET);
+    case 'NOT_THREAD_MEMBER':
+      return res.status(403).json({
+        success: false,
+        error: error.message,
+      });
 
-        await sequelize.query(
-            `INSERT INTO messages (thread_id, sender_id, recipient_id, body)
-             VALUES ($1, $2, $3, $4);`,
-            {
-                bind: [thread_id, sender_id, recipient_id, encryptedBody]
-            }
-        );
+    case 'THREAD_NOT_FOUND':
+      return res.status(404).json({
+        success: false,
+        error: error.message,
+      });
 
-        // Create notification for message received
-        try {
-            await notificationService.createNotification({
-                userId: recipient_id,
-                type: 'message_received',
-                title: 'New Message',
-                message: `You received a new message.`,
-                link: `/messages`,
-                metadata: {
-                    sender_id: sender_id,
-                    thread_id: thread_id,
-                    preview: body.substring(0, 50)
-                }
-            });
-        } catch (notifError) {
-            console.error('Failed to create message notification:', notifError);
-        }
+    case 'PARTICIPANT_ALREADY_EXISTS':
+      return res.status(409).json({
+        success: false,
+        error: error.message,
+      });
 
-        res.json({ success: true, message: "Encrypted message saved." });
-    } catch (err) {
-        console.error("SEND ERROR:", err);
-        res.status(500).json({ error: "Failed to send message" });
-    }
+    case 'MSG_SECRET_MISSING':
+      return res.status(500).json({
+        success: false,
+        error: error.message,
+      });
+
+    default:
+      return res.status(500).json({
+        success: false,
+        error: 'INTERNAL_SERVER_ERROR',
+      });
+  }
+}
+
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    cb(null, path.join(process.cwd(), 'uploads'));
+  },
+  filename: function (req, file, cb) {
+    const safeOriginalName = file.originalname.replace(/\s+/g, '_');
+    const uniqueName = `${Date.now()}-${safeOriginalName}`;
+    cb(null, uniqueName);
+  },
 });
 
-// GET MESSAGE THREAD (decrypt before sending)
-router.get("/thread/:threadId", authenticate, async (req, res) => {
-    try {
-        const { threadId } = req.params;
+const upload = multer({ storage });
 
-        const [rows] = await sequelize.query(
-                        `SELECT *
-                         FROM messages
-                         WHERE thread_id = $1
-                             AND (sender_id = $2 OR recipient_id = $2)
-                         ORDER BY created_at ASC`,
-                        { bind: [threadId, req.user.id] }
-        );
+router.use(authenticate);
 
-        const key = process.env.MSG_SECRET;
-
-        const messages = rows.map(row => ({
-            id: row.id,
-            sender_id: row.sender_id,
-            recipient_id: row.recipient_id,
-            created_at: row.created_at,
-            body: decryptMessage(row.body, key),
-            attachments: row.attachments
-        }));
-
-        res.json({ success: true, messages });
-    } catch (err) {
-        console.error("FETCH ERROR:", err);
-        res.status(500).json({ error: "Failed to load messages" });
+// Upload a file for later message attachment
+router.post('/upload', upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        error: 'NO_FILE_UPLOADED',
+      });
     }
+
+    return res.status(201).json({
+      success: true,
+      file_name: req.file.originalname,
+      file_url: `/uploads/${req.file.filename}`,
+    });
+  } catch (error) {
+    console.error('UPLOAD ERROR:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'UPLOAD_FAILED',
+    });
+  }
 });
 
-// ADMIN MESSAGE RETRIEVAL
-router.get("/admin/thread/:threadId", authenticate, requireAdmin, async (req, res) => {
-    try {
-        const { threadId } = req.params;
+// Create or get direct thread
+router.post('/threads/direct', async (req, res) => {
+  try {
+    const { otherUserId, isSensitive = false } = req.body;
 
-        const [rows] = await sequelize.query(
-            "SELECT * FROM messages WHERE thread_id = $1 ORDER BY created_at ASC",
-            { bind: [threadId] }
-        );
+    const result = await messageService.createDirectThread({
+      creatorId: req.user.id,
+      otherUserId,
+      isSensitive,
+    });
 
-        const messages = rows.map(r => ({
-            ...r,
-            body: decryptMessage(r.body, process.env.MSG_SECRET)
-        }));
+    return res.status(201).json({
+      success: true,
+      ...result,
+    });
+  } catch (error) {
+    return handleServiceError(res, error);
+  }
+});
 
-        res.json({ success: true, messages });
-    } catch (err) {
-        console.error("ADMIN FETCH ERROR:", err);
-        res.status(500).json({ error: "Failed to load admin thread messages" });
-    }
+// Create group thread
+router.post('/threads/group', async (req, res) => {
+  try {
+    const {
+      name,
+      participantIds = [],
+      isSensitive = false,
+    } = req.body;
+
+    const result = await messageService.createGroupThread({
+      creatorId: req.user.id,
+      name,
+      participantIds,
+      isSensitive,
+    });
+
+    return res.status(201).json({
+      success: true,
+      ...result,
+    });
+  } catch (error) {
+    return handleServiceError(res, error);
+  }
+});
+
+// Get all threads for current user
+router.get('/threads', async (req, res) => {
+  try {
+    const threads = await messageService.getUserThreads(req.user.id);
+
+    return res.status(200).json({
+      success: true,
+      threads,
+    });
+  } catch (error) {
+    return handleServiceError(res, error);
+  }
+});
+
+// Send message
+router.post('/threads/:threadId/messages', async (req, res) => {
+  try {
+    const { threadId } = req.params;
+    const { body, attachments = [] } = req.body;
+
+    const result = await messageService.sendMessage({
+      threadId,
+      senderId: req.user.id,
+      body,
+      attachments,
+    });
+
+    return res.status(201).json({
+      success: true,
+      ...result,
+    });
+  } catch (error) {
+    return handleServiceError(res, error);
+  }
+});
+
+// Get paginated messages in thread
+router.get('/threads/:threadId/messages', async (req, res) => {
+  try {
+    const { threadId } = req.params;
+    const { limit, before = null } = req.query;
+
+    const result = await messageService.getThreadMessages({
+      threadId,
+      userId: req.user.id,
+      limit,
+      before,
+    });
+
+    return res.status(200).json({
+      success: true,
+      ...result,
+    });
+  } catch (error) {
+    return handleServiceError(res, error);
+  }
+});
+
+// Mark thread read
+router.post('/threads/:threadId/read', async (req, res) => {
+  try {
+    const { threadId } = req.params;
+
+    const result = await messageService.markThreadRead(
+      threadId,
+      req.user.id
+    );
+
+    return res.status(200).json({
+      success: true,
+      ...result,
+    });
+  } catch (error) {
+    return handleServiceError(res, error);
+  }
+});
+
+// Get unread total
+router.get('/unread', async (req, res) => {
+  try {
+    const result = await messageService.getUnreadTotal(req.user.id);
+
+    return res.status(200).json({
+      success: true,
+      ...result,
+    });
+  } catch (error) {
+    return handleServiceError(res, error);
+  }
 });
 
 module.exports = router;
-

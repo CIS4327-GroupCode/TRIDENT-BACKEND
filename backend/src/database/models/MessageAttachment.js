@@ -1,9 +1,9 @@
 const { DataTypes, Model } = require('sequelize');
 const sequelize = require('../index');
 
-class Message extends Model {}
+class MessageAttachment extends Model {}
 
-Message.init(
+MessageAttachment.init(
   {
     id: {
       type: DataTypes.INTEGER,
@@ -11,28 +11,22 @@ Message.init(
       autoIncrement: true,
       allowNull: false,
     },
-    thread_id: {
+    message_id: {
       type: DataTypes.INTEGER,
       allowNull: false,
       references: {
-        model: 'threads',
+        model: 'messages',
         key: 'id',
       },
       onDelete: 'CASCADE',
     },
-    sender_id: {
-      type: DataTypes.INTEGER,
+    file_name: {
+      type: DataTypes.STRING,
       allowNull: false,
-      references: {
-        model: '_user',
-        key: 'id',
-      },
-      onUpdate: 'CASCADE',
-      onDelete: 'CASCADE',
     },
-    body: {
-      type: DataTypes.TEXT,
-      allowNull: false,
+    file_url: {
+      type: DataTypes.STRING,
+      allowNull: true,
     },
     created_at: {
       type: DataTypes.DATE,
@@ -42,11 +36,11 @@ Message.init(
   },
   {
     sequelize,
-    modelName: 'Message',
-    tableName: 'messages',
+    modelName: 'MessageAttachment',
+    tableName: 'message_attachments',
     timestamps: false,
     underscored: true,
   }
 );
 
-module.exports = Message;
+module.exports = MessageAttachment;

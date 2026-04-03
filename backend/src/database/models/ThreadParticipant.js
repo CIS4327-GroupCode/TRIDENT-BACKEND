@@ -1,15 +1,14 @@
 const { DataTypes, Model } = require('sequelize');
 const sequelize = require('../index');
 
-class Message extends Model {}
+class ThreadParticipant extends Model {}
 
-Message.init(
+ThreadParticipant.init(
   {
     id: {
       type: DataTypes.INTEGER,
       primaryKey: true,
       autoIncrement: true,
-      allowNull: false,
     },
     thread_id: {
       type: DataTypes.INTEGER,
@@ -18,23 +17,21 @@ Message.init(
         model: 'threads',
         key: 'id',
       },
-      onDelete: 'CASCADE',
     },
-    sender_id: {
+    user_id: {
       type: DataTypes.INTEGER,
       allowNull: false,
-      references: {
-        model: '_user',
-        key: 'id',
-      },
-      onUpdate: 'CASCADE',
-      onDelete: 'CASCADE',
     },
-    body: {
-      type: DataTypes.TEXT,
+    unread_count: {
+      type: DataTypes.INTEGER,
       allowNull: false,
+      defaultValue: 0,
     },
-    created_at: {
+    last_read_message_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+    },
+    joined_at: {
       type: DataTypes.DATE,
       allowNull: false,
       defaultValue: DataTypes.NOW,
@@ -42,11 +39,11 @@ Message.init(
   },
   {
     sequelize,
-    modelName: 'Message',
-    tableName: 'messages',
+    modelName: 'ThreadParticipant',
+    tableName: 'thread_participants',
     timestamps: false,
     underscored: true,
   }
 );
 
-module.exports = Message;
+module.exports = ThreadParticipant;
