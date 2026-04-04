@@ -193,22 +193,23 @@ describe('API Routes Integration', () => {
   });
 
   describe('CORS policy', () => {
-    it('should reject requests from disallowed origins', async () => {
+    it('should allow requests from any origin', async () => {
       const response = await request(app)
         .get('/health')
         .set('Origin', 'https://malicious.example.com');
 
-      expect(response.status).toBe(500);
-      expect(response.body).toHaveProperty('error', 'Not allowed by CORS');
+      expect(response.status).toBe(200);
+      expect(response.headers['access-control-allow-origin']).toBe('*');
+      expect(response.body).toHaveProperty('status', 'ok');
     });
 
-    it('should allow requests from configured origins', async () => {
+    it('should return wildcard allow-origin for configured local origins', async () => {
       const response = await request(app)
         .get('/health')
         .set('Origin', 'http://localhost:3000');
 
       expect(response.status).toBe(200);
-      expect(response.headers['access-control-allow-origin']).toBe('http://localhost:3000');
+      expect(response.headers['access-control-allow-origin']).toBe('*');
       expect(response.body).toHaveProperty('status', 'ok');
     });
   });

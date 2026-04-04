@@ -10,41 +10,8 @@ const sequelize = require('./database');
 
 const app = express();
 
-const normalizeOrigin = (val) => (val && typeof val === 'string' ? val.trim().replace(/\/+$/, '') : '');
-
-// Build the allowed origins list from environment
-const allowedOriginSet = new Set([
-  normalizeOrigin(process.env.FRONTEND_URL),
-  // Support multiple explicit origins for preview/staging deployments
-  ...(process.env.FRONTEND_URLS ? process.env.FRONTEND_URLS.split(',').map(normalizeOrigin) : []),
-  // Local dev only (excluded in production)
-  ...(process.env.NODE_ENV !== 'production' ? ['http://localhost:3000'] : []),
-].filter(Boolean));
-
-// Allow *.vercel.app for staging/preview deployments
-const allowedOriginPatterns = [/\.vercel\.app$/i];
-
 const corsOptions = {
-  origin(origin, callback) {
-    // 1. Allow non-browser requests (server-to-server, curl, health checks)
-    if (!origin) return callback(null, true);
-
-    const normalized = normalizeOrigin(origin);
-
-    // 2. Exact match against FRONTEND_URL / FRONTEND_URLS / localhost
-    if (allowedOriginSet.has(normalized)) {
-      return callback(null, normalized);
-    }
-
-    // 3. Pattern match for Vercel preview/staging deployments
-    if (allowedOriginPatterns.some(p => p.test(normalized))) {
-      return callback(null, normalized);
-    }
-
-    console.warn('CORS blocked:', origin);
-    callback(new Error('Not allowed by CORS'));
-  },
-  credentials: true,
+  origin: '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   exposedHeaders: ['Content-Disposition'],
@@ -126,15 +93,9 @@ app.use((req, res) => {
 // Global error handler (CORS-aware: sets origin header so browser can read the error)
 app.use((err, req, res, next) => {
   console.error('Global error handler:', err);
-
-  const origin = req.headers.origin;
-  if (origin) {
-    const normalized = normalizeOrigin(origin);
-    if (allowedOriginSet.has(normalized) || allowedOriginPatterns.some(p => p.test(normalized))) {
-      res.set('Access-Control-Allow-Origin', normalized);
-      res.set('Access-Control-Allow-Credentials', 'true');
-    }
-  }
+  res.set('Access-Control-Allow-Origin', '*');
+  res.set('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,PATCH,OPTIONS');
+  res.set('Access-Control-Allow-Headers', 'Content-Type,Authorization');
 
   res.status(err.status || 500).json({
     error: err.message || 'Internal server error',
