@@ -1,56 +1,55 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const path = require('path');
 
 const db = require('./db');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const sequelize = require('./database');
 
-const messagesRouter = require('./messages');
-
 const app = express();
 
-// CORS configuration - allow frontend to connect from multiple ports
-const allowedOrigins = [
-  'http://localhost:3000',
-  'http://localhost:5173',
-  process.env.FRONTEND_URL,
-  // Add Vercel preview deployments
-  /\.vercel\.app$/
-].filter(Boolean);
+const normalizeOrigin = (val) => (val && typeof val === 'string' ? val.trim().replace(/\/+$/, '') : '');
 
-app.use(cors({
-  origin: function (origin, callback) {
-    // Allow requests with no origin (like mobile apps or curl requests)
+// Only include what is strictly necessary
+const allowedOriginSet = new Set([
+  normalizeOrigin(process.env.FRONTEND_URL), 
+  'http://localhost:3000', // Optional: fallback for dev if .env is missing
+].filter(Boolean));
+
+const allowedOriginPatterns = [/\.vercel\.app$/i];
+
+const corsOptions = {
+  origin(origin, callback) {
+    // 1. Allow non-browser requests
     if (!origin) return callback(null, true);
-    
-    // Check if origin is in allowed list or matches Vercel pattern
-    const isAllowed = allowedOrigins.some(allowed => {
-      if (allowed instanceof RegExp) {
-        return allowed.test(origin);
-      }
-      return allowed === origin;
-    });
-    
-    if (isAllowed) {
-      callback(null, true);
-    } else {
-      console.warn('CORS blocked origin:', origin);
-      callback(new Error('Not allowed by CORS'));
+
+    const normalized = normalizeOrigin(origin);
+
+    // 2. Check exact match or Vercel pattern
+    if (allowedOriginSet.has(normalized) || allowedOriginPatterns.some(p => p.test(normalized))) {
+      return callback(null, true);
     }
+
+    console.warn('CORS blocked:', origin);
+    callback(new Error('Not allowed by CORS'));
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  preflightContinue: false,
-  optionsSuccessStatus: 204
-}));
+  optionsSuccessStatus: 204,
+};
+
+app.use(cors(corsOptions));
 
 app.use(express.json());
 
+// Serve uploaded files
+app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
+app.use('/api/uploads', express.static(path.join(process.cwd(), 'uploads')));
+
 // Handle OPTIONS requests explicitly for CORS preflight
-app.options('*', cors());
+app.options('*', cors(corsOptions));
 
 // Favicon handler - prevent 404/500 errors
 app.get('/favicon.ico', (req, res) => {
@@ -82,6 +81,7 @@ const notificationRoutes = require('./routes/notificationRoutes');
 const applicationRoutes = require('./routes/applicationRoutes');
 const matchRoutes = require('./routes/matchRoutes');
 const agreementRoutes = require('./routes/agreementRoutes');
+const adminChatAuditRoutes = require('./routes/adminChatAuditRoutes');
 
 //home route just to check if server is running
 app.get('/', (req, res) => {
@@ -100,6 +100,7 @@ app.use('/api/notifications', notificationRoutes);
 app.use('/api/applications', applicationRoutes);
 app.use('/api/matches', matchRoutes);
 app.use('/api/agreements', agreementRoutes);
+app.use('/api/admin/chat-audit', adminChatAuditRoutes);
 
 // 404 handler for undefined routes
 app.use((req, res) => {

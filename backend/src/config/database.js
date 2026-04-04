@@ -3,6 +3,35 @@ const pg = require('pg');
 
 const { DATABASE_URL, NODE_ENV } = process.env;
 
+const parseBooleanEnv = (value) => {
+  if (value === undefined || value === null || value === '') return null;
+  const normalized = String(value).trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
+  if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
+  return null;
+};
+
+const shouldUseSslInNonProd = () => {
+  // Optional manual override for local development.
+  const override = parseBooleanEnv(process.env.DB_SSL);
+  if (override !== null) return override;
+
+  if (!DATABASE_URL) return false;
+
+  const url = DATABASE_URL.toLowerCase();
+  const sslExplicitlyRequired = url.includes('sslmode=require');
+  const neonConnection = url.includes('neon');
+
+  return sslExplicitlyRequired || neonConnection;
+};
+
+const nonProdSslConfig = shouldUseSslInNonProd()
+  ? {
+      require: true,
+      rejectUnauthorized: false,
+    }
+  : false;
+
 // Serverless-optimized pool settings
 const poolConfig = {
   max: 3, // Reduced for serverless
@@ -20,11 +49,8 @@ module.exports = {
     logging: false,
     pool: poolConfig,
     dialectOptions: {
-      // SSL ON for Neon cloud Postgres
-      ssl: {
-        require: true,
-        rejectUnauthorized: false,
-      },
+      // Auto-detect SSL for local development (Neon/cloud URL or DB_SSL=true).
+      ssl: nonProdSslConfig,
     },
   },
 
@@ -81,12 +107,8 @@ module.exports = {
       idle: 10000,
     },
     dialectOptions: {
-      // Only use SSL if DATABASE_URL is provided (cloud database)
-      // Local databases typically don't support SSL
-      ssl: DATABASE_URL && DATABASE_URL.includes('neon') ? {
-        require: true,
-        rejectUnauthorized: false,
-      } : false,
+      // Keep test SSL behavior aligned with non-production URL detection.
+      ssl: nonProdSslConfig,
     },
   },
 };

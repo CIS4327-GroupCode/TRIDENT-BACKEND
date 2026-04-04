@@ -1,5 +1,6 @@
-const { ResearcherProfile, AcademicHistory, Certification, Application, Project, Organization, User } = require('../database/models');
+const { ResearcherProfile, AcademicHistory, Certification, Application, Project, Organization, User, Rating } = require('../database/models');
 const { logAudit, AUDIT_ACTIONS } = require('../utils/auditLogger');
+const { syncProjectsCompletedForUser } = require('../services/researcherMetricsService');
 
 function trimStringFields(input = {}) {
   const output = {};
@@ -62,6 +63,9 @@ const getResearcherProfile = async (req, res) => {
       return res.status(404).json({ error: 'Researcher profile not found' });
     }
 
+    const computedProjectsCompleted = await syncProjectsCompletedForUser(userId);
+    profile.setDataValue('projects_completed', computedProjectsCompleted);
+
     // Calculate and include completeness
     const completeness = computeProfileCompleteness(profile.toJSON());
 
@@ -98,8 +102,7 @@ const updateResearcherProfile = async (req, res) => {
       'hourly_rate_min',
       'hourly_rate_max',
       'availability',
-      'max_concurrent_projects',
-      'projects_completed'
+      'max_concurrent_projects'
     ];
 
     // Filter only allowed fields from request body
@@ -500,15 +503,43 @@ const getResearcherProjects = async (req, res) => {
       };
     });
 
+    const projectIds = projects
+      .map((project) => project.project_id)
+      .filter((projectId) => Number.isInteger(projectId));
+
+    let ratedProjectIds = new Set();
+    if (projectIds.length > 0) {
+      const submittedRatings = await Rating.findAll({
+        where: {
+          rated_by_user_id: userId,
+          project_id: projectIds,
+        },
+        attributes: ['project_id'],
+      });
+
+      ratedProjectIds = new Set(
+        submittedRatings
+          .map((rating) => rating.project_id)
+          .filter((projectId) => Number.isInteger(projectId))
+      );
+    }
+
+    const projectsWithRatingState = projects.map((project) => ({
+      ...project,
+      has_submitted_rating: Number.isInteger(project.project_id)
+        ? ratedProjectIds.has(project.project_id)
+        : false,
+    }));
+
     // Separate current and completed projects
-    const currentProjects = projects.filter(p => p.status === 'in_progress');
-    const completedProjects = projects.filter(p => p.status === 'completed');
+    const currentProjects = projectsWithRatingState.filter(p => p.status === 'in_progress');
+    const completedProjects = projectsWithRatingState.filter(p => p.status === 'completed');
 
     return res.status(200).json({ 
       projects: {
         current: currentProjects,
         completed: completedProjects,
-        total: projects.length
+        total: projectsWithRatingState.length
       }
     });
   } catch (error) {
@@ -543,6 +574,9 @@ const getResearcherProfileById = async (req, res) => {
     if (!user) {
       return res.status(404).json({ error: 'Researcher not found' });
     }
+
+    const computedProjectsCompleted = await syncProjectsCompletedForUser(id);
+    profile.setDataValue('projects_completed', computedProjectsCompleted);
 
     // Fetch academic history and certifications
     const academics = await AcademicHistory.findAll({

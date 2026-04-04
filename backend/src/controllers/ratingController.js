@@ -427,6 +427,53 @@ const getUserRatings = async (req, res) => {
   }
 };
 
+const getRatingsGivenByUser = async (req, res) => {
+  try {
+    const userId = Number.parseInt(req.params.userId, 10);
+    if (!Number.isInteger(userId)) {
+      return res.status(400).json({ error: 'Invalid user id' });
+    }
+
+    const page = Math.max(Number.parseInt(req.query.page || '1', 10), 1);
+    const limit = Math.min(Math.max(Number.parseInt(req.query.limit || '20', 10), 1), 100);
+    const offset = (page - 1) * limit;
+
+    const { count, rows } = await Rating.findAndCountAll({
+      where: {
+        rated_by_user_id: userId,
+      },
+      include: [
+        {
+          model: User,
+          as: 'reviewedUser',
+          attributes: ['id', 'name', 'role']
+        },
+        {
+          model: Project,
+          as: 'project',
+          attributes: ['project_id', 'title']
+        }
+      ],
+      order: [['created_at', 'DESC']],
+      limit,
+      offset
+    });
+
+    return res.status(200).json({
+      ratings: rows,
+      pagination: {
+        total: count,
+        page,
+        limit,
+        totalPages: Math.ceil(count / limit)
+      }
+    });
+  } catch (error) {
+    console.error('Get ratings given by user error:', error);
+    return res.status(500).json({ error: 'Failed to fetch submitted ratings' });
+  }
+};
+
 const getUserRatingSummary = async (req, res) => {
   try {
     const userId = Number.parseInt(req.params.userId, 10);
@@ -697,6 +744,7 @@ module.exports = {
   getProjectRatings,
   getProjectRatingSummary,
   getUserRatings,
+  getRatingsGivenByUser,
   getUserRatingSummary,
   updateProjectRating,
   deleteProjectRating,

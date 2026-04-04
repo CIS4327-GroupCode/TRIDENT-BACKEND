@@ -138,7 +138,7 @@ async function generateMatches() {
             type: 'new_match_available',
             title: 'New Project Match',
             message: `You have a new high-scoring match (${Math.round(scoreData.totalScore)}%) for "${project.title}".`,
-            link: '/dashboard?tab=tentative',
+            link: '/dashboard/researcher?tab=tentative',
             metadata: {
               project_id: project.project_id,
               project_title: project.title,

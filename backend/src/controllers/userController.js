@@ -5,6 +5,7 @@ const { EmailVerification } = require('../database/models');
 const emailService = require('../services/emailService');
 const { PASSWORD_POLICY_MESSAGE, isStrongPassword } = require('../utils/passwordPolicy');
 const { logAudit, AUDIT_ACTIONS } = require('../utils/auditLogger');
+const { syncProjectsCompletedForUser } = require('../services/researcherMetricsService');
 
 function trimStringFields(input = {}) {
   const output = {};
@@ -46,6 +47,11 @@ const getUserProfile = async (req, res) => {
 
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
+    }
+
+    if (user.role === 'researcher' && user.researcherProfile) {
+      const computedProjectsCompleted = await syncProjectsCompletedForUser(user.id);
+      user.researcherProfile.setDataValue('projects_completed', computedProjectsCompleted);
     }
 
     return res.status(200).json({ user });
@@ -476,7 +482,8 @@ const browseResearchers = async (req, res) => {
             'rate_max',
             'availability',
             'expertise',
-            'compliance_certifications'
+            'compliance_certifications',
+            'projects_completed'
           ]
         }
       ],
@@ -485,8 +492,19 @@ const browseResearchers = async (req, res) => {
       distinct: true // For accurate count with includes
     });
 
+    const rowsWithSyncedProjectsCompleted = await Promise.all(
+      researchers.rows.map(async (researcher) => {
+        const plainResearcher = researcher.toJSON();
+        if (plainResearcher.researcherProfile) {
+          const computedProjectsCompleted = await syncProjectsCompletedForUser(plainResearcher.id);
+          plainResearcher.researcherProfile.projects_completed = computedProjectsCompleted;
+        }
+        return plainResearcher;
+      })
+    );
+
     return res.status(200).json({
-      researchers: researchers.rows,
+      researchers: rowsWithSyncedProjectsCompleted,
       total: researchers.count,
       limit: parseInt(limit),
       offset: parseInt(offset)

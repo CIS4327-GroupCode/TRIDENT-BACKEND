@@ -7,6 +7,9 @@ const Match = require('./Match');
 const Rating = require('./Rating');
 const Milestone = require('./Milestone');
 const Message = require('./Message');
+const Thread = require('./Thread');
+const ThreadParticipant = require('./ThreadParticipant');
+const MessageAttachment = require('./MessageAttachment');
 const AuditLog = require('./AuditLog');
 const UserPreferences = require('./UserPreferences');
 const ProjectReview = require('./ProjectReview');
@@ -79,13 +82,74 @@ Milestone.belongsTo(Project, { foreignKey: 'project_id', as: 'project' });
 Milestone.belongsTo(Milestone, { foreignKey: 'depends_on', as: 'dependency' });
 Milestone.hasMany(Milestone, { foreignKey: 'depends_on', as: 'dependents' });
 
-// User <-> Message (sender)
-User.hasMany(Message, { foreignKey: 'sender_id', as: 'sentMessages' });
-Message.belongsTo(User, { foreignKey: 'sender_id', as: 'sender' });
+// Thread <-> Message
+Thread.hasMany(Message, {
+  foreignKey: 'thread_id',
+  as: 'messages',
+  onDelete: 'CASCADE',
+});
+Message.belongsTo(Thread, {
+  foreignKey: 'thread_id',
+  as: 'thread',
+});
 
-// User <-> Message (recipient)
-User.hasMany(Message, { foreignKey: 'recipient_id', as: 'receivedMessages' });
-Message.belongsTo(User, { foreignKey: 'recipient_id', as: 'recipient' });
+// Thread <-> ThreadParticipant
+Thread.hasMany(ThreadParticipant, {
+  foreignKey: 'thread_id',
+  as: 'participants',
+  onDelete: 'CASCADE',
+});
+ThreadParticipant.belongsTo(Thread, {
+  foreignKey: 'thread_id',
+  as: 'thread',
+});
+
+// User <-> ThreadParticipant
+User.hasMany(ThreadParticipant, {
+  foreignKey: 'user_id',
+  as: 'threadMemberships',
+  onDelete: 'CASCADE',
+});
+ThreadParticipant.belongsTo(User, {
+  foreignKey: 'user_id',
+  as: 'user',
+});
+
+// User <-> Thread (many-to-many)
+User.belongsToMany(Thread, {
+  through: ThreadParticipant,
+  foreignKey: 'user_id',
+  otherKey: 'thread_id',
+  as: 'threads',
+});
+
+Thread.belongsToMany(User, {
+  through: ThreadParticipant,
+  foreignKey: 'thread_id',
+  otherKey: 'user_id',
+  as: 'users',
+});
+
+// User <-> Message (sender only)
+User.hasMany(Message, {
+  foreignKey: 'sender_id',
+  as: 'sentMessages',
+});
+Message.belongsTo(User, {
+  foreignKey: 'sender_id',
+  as: 'sender',
+});
+
+// Message <-> MessageAttachment
+Message.hasMany(MessageAttachment, {
+  foreignKey: 'message_id',
+  as: 'attachments',
+  onDelete: 'CASCADE',
+});
+MessageAttachment.belongsTo(Message, {
+  foreignKey: 'message_id',
+  as: 'message',
+});
 
 // User <-> AuditLog
 User.hasMany(AuditLog, { foreignKey: 'actor_id', as: 'auditLogs' });
@@ -169,6 +233,9 @@ module.exports = {
   Rating,
   Milestone,
   Message,
+  Thread,
+  ThreadParticipant,
+  MessageAttachment,
   AuditLog,
   UserPreferences,
   ProjectReview,
