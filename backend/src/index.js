@@ -10,41 +10,63 @@ const sequelize = require('./database');
 
 const app = express();
 
-// CORS configuration - allow frontend to connect from multiple ports
-const allowedOrigins = [
+function normalizeOrigin(value) {
+  if (!value || typeof value !== 'string') return '';
+  return value.trim().replace(/\/+$/, '');
+}
+
+function parseOrigins(value) {
+  if (!value || typeof value !== 'string') return [];
+  return value
+    .split(',')
+    .map((origin) => normalizeOrigin(origin))
+    .filter(Boolean);
+}
+
+// CORS configuration - allow frontend to connect from localhost, configured origins, and Vercel previews
+const allowedOriginSet = new Set([
   'http://localhost:3000',
   'http://localhost:5173',
-  process.env.FRONTEND_URL,
-  // Add Vercel preview deployments
-  /\.vercel\.app$/
-].filter(Boolean);
+  'http://127.0.0.1:3000',
+  'http://127.0.0.1:5173',
+  normalizeOrigin(process.env.FRONTEND_URL),
+  normalizeOrigin(process.env.APP_URL),
+  ...parseOrigins(process.env.FRONTEND_URLS),
+].filter(Boolean));
 
-app.use(cors({
-  origin: function (origin, callback) {
+const allowedOriginPatterns = [
+  /\.vercel\.app$/i,
+];
+
+function isAllowedOrigin(origin) {
+  const normalizedOrigin = normalizeOrigin(origin);
+  if (!normalizedOrigin) return true;
+  if (allowedOriginSet.has(normalizedOrigin)) return true;
+  return allowedOriginPatterns.some((pattern) => pattern.test(normalizedOrigin));
+}
+
+const corsOptions = {
+  origin(origin, callback) {
     // Allow requests with no origin (like mobile apps or curl requests)
     if (!origin) return callback(null, true);
-    
-    // Check if origin is in allowed list or matches Vercel pattern
-    const isAllowed = allowedOrigins.some(allowed => {
-      if (allowed instanceof RegExp) {
-        return allowed.test(origin);
-      }
-      return allowed === origin;
-    });
-    
-    if (isAllowed) {
-      callback(null, true);
-    } else {
-      console.warn('CORS blocked origin:', origin);
-      callback(new Error('Not allowed by CORS'));
+
+    if (isAllowedOrigin(origin)) {
+      return callback(null, true);
     }
+
+    console.warn('CORS blocked origin:', origin);
+    return callback(new Error('Not allowed by CORS'));
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  // Let cors package reflect Access-Control-Request-Headers for preflight
+  // so staging builds with extra headers (e.g., tracing headers) are not blocked.
+  allowedHeaders: undefined,
   preflightContinue: false,
-  optionsSuccessStatus: 204
-}));
+  optionsSuccessStatus: 204,
+};
+
+app.use(cors(corsOptions));
 
 app.use(express.json());
 
@@ -53,7 +75,7 @@ app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
 app.use('/api/uploads', express.static(path.join(process.cwd(), 'uploads')));
 
 // Handle OPTIONS requests explicitly for CORS preflight
-app.options('*', cors());
+app.options('*', cors(corsOptions));
 
 // Favicon handler - prevent 404/500 errors
 app.get('/favicon.ico', (req, res) => {
