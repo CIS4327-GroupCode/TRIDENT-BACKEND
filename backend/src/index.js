@@ -10,59 +10,33 @@ const sequelize = require('./database');
 
 const app = express();
 
-function normalizeOrigin(value) {
-  if (!value || typeof value !== 'string') return '';
-  return value.trim().replace(/\/+$/, '');
-}
+const normalizeOrigin = (val) => (val && typeof val === 'string' ? val.trim().replace(/\/+$/, '') : '');
 
-function parseOrigins(value) {
-  if (!value || typeof value !== 'string') return [];
-  return value
-    .split(',')
-    .map((origin) => normalizeOrigin(origin))
-    .filter(Boolean);
-}
-
-// CORS configuration - allow frontend to connect from localhost, configured origins, and Vercel previews
+// Only include what is strictly necessary
 const allowedOriginSet = new Set([
-  'http://localhost:3000',
-  'http://localhost:5173',
-  'http://127.0.0.1:3000',
-  'http://127.0.0.1:5173',
-  normalizeOrigin(process.env.FRONTEND_URL),
-  normalizeOrigin(process.env.APP_URL),
-  ...parseOrigins(process.env.FRONTEND_URLS),
+  normalizeOrigin(process.env.FRONTEND_URL), 
+  'http://localhost:3000', // Optional: fallback for dev if .env is missing
 ].filter(Boolean));
 
-const allowedOriginPatterns = [
-  /\.vercel\.app$/i,
-];
-
-function isAllowedOrigin(origin) {
-  const normalizedOrigin = normalizeOrigin(origin);
-  if (!normalizedOrigin) return true;
-  if (allowedOriginSet.has(normalizedOrigin)) return true;
-  return allowedOriginPatterns.some((pattern) => pattern.test(normalizedOrigin));
-}
+const allowedOriginPatterns = [/\.vercel\.app$/i];
 
 const corsOptions = {
   origin(origin, callback) {
-    // Allow requests with no origin (like mobile apps or curl requests)
+    // 1. Allow non-browser requests
     if (!origin) return callback(null, true);
 
-    if (isAllowedOrigin(origin)) {
+    const normalized = normalizeOrigin(origin);
+
+    // 2. Check exact match or Vercel pattern
+    if (allowedOriginSet.has(normalized) || allowedOriginPatterns.some(p => p.test(normalized))) {
       return callback(null, true);
     }
 
-    console.warn('CORS blocked origin:', origin);
-    return callback(new Error('Not allowed by CORS'));
+    console.warn('CORS blocked:', origin);
+    callback(new Error('Not allowed by CORS'));
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  // Let cors package reflect Access-Control-Request-Headers for preflight
-  // so staging builds with extra headers (e.g., tracing headers) are not blocked.
-  allowedHeaders: undefined,
-  preflightContinue: false,
   optionsSuccessStatus: 204,
 };
 
