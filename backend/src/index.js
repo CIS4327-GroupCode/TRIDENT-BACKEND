@@ -10,33 +10,12 @@ const sequelize = require('./database');
 
 const app = express();
 
-const normalizeOrigin = (val) => (val && typeof val === 'string' ? val.trim().replace(/\/+$/, '') : '');
-
-// Only include what is strictly necessary
-const allowedOriginSet = new Set([
-  normalizeOrigin(process.env.FRONTEND_URL), 
-  'http://localhost:3000', // Optional: fallback for dev if .env is missing
-].filter(Boolean));
-
-const allowedOriginPatterns = [/\.vercel\.app$/i];
-
 const corsOptions = {
-  origin(origin, callback) {
-    // 1. Allow non-browser requests
-    if (!origin) return callback(null, true);
-
-    const normalized = normalizeOrigin(origin);
-
-    // 2. Check exact match or Vercel pattern
-    if (allowedOriginSet.has(normalized) || allowedOriginPatterns.some(p => p.test(normalized))) {
-      return callback(null, true);
-    }
-
-    console.warn('CORS blocked:', origin);
-    callback(new Error('Not allowed by CORS'));
-  },
-  credentials: true,
+  origin: '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  exposedHeaders: ['Content-Disposition'],
+  maxAge: 86400,
   optionsSuccessStatus: 204,
 };
 
@@ -111,9 +90,13 @@ app.use((req, res) => {
   });
 });
 
-// Global error handler
+// Global error handler (CORS-aware: sets origin header so browser can read the error)
 app.use((err, req, res, next) => {
   console.error('Global error handler:', err);
+  res.set('Access-Control-Allow-Origin', '*');
+  res.set('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,PATCH,OPTIONS');
+  res.set('Access-Control-Allow-Headers', 'Content-Type,Authorization');
+
   res.status(err.status || 500).json({
     error: err.message || 'Internal server error',
     ...(process.env.NODE_ENV === 'development' && { stack: err.stack })

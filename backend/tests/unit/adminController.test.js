@@ -8,21 +8,27 @@ jest.mock('../../src/database/models', () => ({
   User: {
     findByPk: jest.fn(),
     findOne: jest.fn(),
+    findAll: jest.fn(),
     findAndCountAll: jest.fn(),
     update: jest.fn()
   },
   Organization: {
     findByPk: jest.fn(),
-    findAll: jest.fn()
+    findAll: jest.fn(),
+    findAndCountAll: jest.fn()
   },
   ResearcherProfile: {
     findByPk: jest.fn()
   },
   Project: {
-    findByPk: jest.fn()
+    findByPk: jest.fn(),
+    findAll: jest.fn(),
+    findAndCountAll: jest.fn()
   },
   Milestone: {
-    findByPk: jest.fn()
+    findByPk: jest.fn(),
+    findAll: jest.fn(),
+    findAndCountAll: jest.fn()
   },
   ProjectReview: {},
   sequelize: {
@@ -273,6 +279,177 @@ describe('Admin Controller', () => {
       await adminController.updateUserStatus(req, res);
 
       expect(res.status).toHaveBeenCalledWith(404);
+    });
+  });
+
+  describe('getAdminAlerts', () => {
+    it('should return overdue, approaching, and atRisk arrays with summary', async () => {
+      const pastDate = new Date();
+      pastDate.setDate(pastDate.getDate() - 5);
+
+      const futureDate = new Date();
+      futureDate.setDate(futureDate.getDate() + 2);
+
+      Milestone.findAll
+        .mockResolvedValueOnce([
+          {
+            id: 1,
+            name: 'Overdue Milestone',
+            status: 'pending',
+            due_date: pastDate.toISOString().slice(0, 10),
+            project: {
+              project_id: 10,
+              title: 'Test Project',
+              status: 'in_progress',
+              organization: { id: 1, name: 'Test Org' }
+            }
+          }
+        ])
+        .mockResolvedValueOnce([
+          {
+            id: 2,
+            name: 'Approaching Milestone',
+            status: 'in_progress',
+            due_date: futureDate.toISOString().slice(0, 10),
+            project: {
+              project_id: 11,
+              title: 'Another Project',
+              status: 'in_progress',
+              organization: { id: 2, name: 'Another Org' }
+            }
+          }
+        ]);
+
+      Project.findAll.mockResolvedValue([]);
+
+      await adminController.getAdminAlerts(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      const responseData = res.json.mock.calls[0][0];
+      expect(responseData).toHaveProperty('overdue');
+      expect(responseData).toHaveProperty('approaching');
+      expect(responseData).toHaveProperty('atRisk');
+      expect(responseData).toHaveProperty('summary');
+      expect(responseData.summary.overdueCount).toBe(1);
+      expect(responseData.summary.approachingCount).toBe(1);
+      expect(responseData.summary.atRiskCount).toBe(0);
+      expect(responseData.overdue[0].days_overdue).toBeGreaterThan(0);
+    });
+
+    it('should handle database errors gracefully', async () => {
+      Milestone.findAll.mockRejectedValue(new Error('DB error'));
+
+      await adminController.getAdminAlerts(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(500);
+      expect(res.json).toHaveBeenCalledWith({ error: 'Failed to fetch alerts' });
+    });
+  });
+
+  describe('exportAdminData', () => {
+    beforeEach(() => {
+      res.setHeader = jest.fn();
+      res.send = jest.fn();
+    });
+
+    it('should return CSV for users export', async () => {
+      req.params.entity = 'users';
+      req.query = {};
+
+      User.findAll.mockResolvedValue([
+        {
+          id: 1,
+          name: 'Test User',
+          email: 'test@test.com',
+          role: 'researcher',
+          account_status: 'active',
+          created_at: new Date('2024-01-01'),
+          organization: { name: 'Test Org' }
+        }
+      ]);
+
+      await adminController.exportAdminData(req, res);
+
+      expect(res.setHeader).toHaveBeenCalledWith('Content-Type', 'text/csv');
+      expect(res.setHeader).toHaveBeenCalledWith(
+        'Content-Disposition',
+        expect.stringContaining('users-export-')
+      );
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.send).toHaveBeenCalled();
+      const csv = res.send.mock.calls[0][0];
+      expect(csv).toContain('ID,Name,Email,Role,Status,Organization,Created');
+      expect(csv).toContain('Test User');
+    });
+
+    it('should return CSV for projects export', async () => {
+      req.params.entity = 'projects';
+      req.query = {};
+
+      Project.findAll.mockResolvedValue([
+        {
+          project_id: 1,
+          title: 'Project A',
+          status: 'open',
+          budget_min: 1000,
+          budget_max: 5000,
+          timeline: '3 months',
+          organization: { name: 'Org A' }
+        }
+      ]);
+
+      await adminController.exportAdminData(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      const csv = res.send.mock.calls[0][0];
+      expect(csv).toContain('ID,Title,Organization,Status');
+      expect(csv).toContain('Project A');
+    });
+
+    it('should reject invalid entity names', async () => {
+      req.params.entity = 'passwords';
+      req.query = {};
+
+      await adminController.exportAdminData(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({ error: expect.stringContaining('Invalid entity') })
+      );
+    });
+
+    it('should handle CSV escaping for values with commas', async () => {
+      req.params.entity = 'users';
+      req.query = {};
+
+      User.findAll.mockResolvedValue([
+        {
+          id: 1,
+          name: 'Last, First',
+          email: 'test@test.com',
+          role: 'researcher',
+          account_status: 'active',
+          created_at: new Date('2024-01-01'),
+          organization: null
+        }
+      ]);
+
+      await adminController.exportAdminData(req, res);
+
+      const csv = res.send.mock.calls[0][0];
+      expect(csv).toContain('"Last, First"');
+    });
+
+    it('should handle database errors', async () => {
+      req.params.entity = 'users';
+      req.query = {};
+
+      User.findAll.mockRejectedValue(new Error('DB error'));
+
+      await adminController.exportAdminData(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(500);
+      expect(res.json).toHaveBeenCalledWith({ error: 'Failed to export data' });
     });
   });
 });

@@ -1276,6 +1276,262 @@ const forceDeleteAttachment = async (req, res) => {
   }
 };
 
+/**
+ * Get SLA alerts — overdue milestones, approaching deadlines, at-risk projects
+ * GET /admin/alerts
+ */
+const getAdminAlerts = async (req, res) => {
+  try {
+    const now = new Date();
+    const threeDaysFromNow = new Date(now);
+    threeDaysFromNow.setDate(threeDaysFromNow.getDate() + 3);
+
+    // Overdue milestones: not completed/cancelled and due_date < now
+    const overdueMilestones = await Milestone.findAll({
+      where: {
+        status: { [Op.notIn]: ['completed', 'cancelled'] },
+        due_date: { [Op.ne]: null, [Op.lt]: now }
+      },
+      include: [{
+        model: Project,
+        as: 'project',
+        attributes: ['project_id', 'title', 'status'],
+        include: [{
+          model: Organization,
+          as: 'organization',
+          attributes: ['id', 'name']
+        }]
+      }],
+      order: [['due_date', 'ASC']]
+    });
+
+    // Approaching deadlines: not completed/cancelled and due_date between now and now+3 days
+    const approachingMilestones = await Milestone.findAll({
+      where: {
+        status: { [Op.notIn]: ['completed', 'cancelled'] },
+        due_date: { [Op.gte]: now, [Op.lte]: threeDaysFromNow }
+      },
+      include: [{
+        model: Project,
+        as: 'project',
+        attributes: ['project_id', 'title', 'status'],
+        include: [{
+          model: Organization,
+          as: 'organization',
+          attributes: ['id', 'name']
+        }]
+      }],
+      order: [['due_date', 'ASC']]
+    });
+
+    // At-risk projects: in_progress projects where ALL milestones with due dates are overdue
+    const inProgressProjects = await Project.findAll({
+      where: { status: 'in_progress' },
+      include: [
+        {
+          model: Organization,
+          as: 'organization',
+          attributes: ['id', 'name']
+        },
+        {
+          model: Milestone,
+          as: 'milestones',
+          attributes: ['id', 'name', 'status', 'due_date']
+        }
+      ]
+    });
+
+    const atRiskProjects = inProgressProjects.filter(project => {
+      const milestonesWithDueDates = (project.milestones || []).filter(m => m.due_date);
+      if (milestonesWithDueDates.length === 0) return false;
+      return milestonesWithDueDates.every(m =>
+        m.status !== 'completed' && m.status !== 'cancelled' && new Date(m.due_date) < now
+      );
+    });
+
+    const formatMilestone = (m) => {
+      const dueDate = new Date(m.due_date);
+      const diffMs = dueDate - now;
+      const diffDays = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+      return {
+        id: m.id,
+        name: m.name,
+        status: m.status,
+        due_date: m.due_date,
+        days_overdue: diffDays < 0 ? Math.abs(diffDays) : 0,
+        days_until_due: diffDays > 0 ? diffDays : 0,
+        project: m.project ? {
+          project_id: m.project.project_id,
+          title: m.project.title,
+          status: m.project.status,
+          organization: m.project.organization ? m.project.organization.name : null
+        } : null
+      };
+    };
+
+    res.status(200).json({
+      overdue: overdueMilestones.map(formatMilestone),
+      approaching: approachingMilestones.map(formatMilestone),
+      atRisk: atRiskProjects.map(p => ({
+        project_id: p.project_id,
+        title: p.title,
+        status: p.status,
+        organization: p.organization ? p.organization.name : null,
+        overdue_milestones: (p.milestones || [])
+          .filter(m => m.due_date && m.status !== 'completed' && m.status !== 'cancelled' && new Date(m.due_date) < now)
+          .length,
+        total_milestones: (p.milestones || []).length
+      })),
+      summary: {
+        overdueCount: overdueMilestones.length,
+        approachingCount: approachingMilestones.length,
+        atRiskCount: atRiskProjects.length
+      }
+    });
+  } catch (error) {
+    console.error('Get admin alerts error:', error);
+    res.status(500).json({ error: 'Failed to fetch alerts' });
+  }
+};
+
+/**
+ * Export admin data as CSV
+ * GET /admin/export/:entity
+ */
+const exportAdminData = async (req, res) => {
+  try {
+    const { entity } = req.params;
+    const allowedEntities = ['users', 'projects', 'milestones', 'organizations'];
+
+    if (!allowedEntities.includes(entity)) {
+      return res.status(400).json({ error: `Invalid entity. Must be one of: ${allowedEntities.join(', ')}` });
+    }
+
+    const { status, role, search } = req.query;
+    const EXPORT_LIMIT = 10000;
+    let rows = [];
+    let headers = [];
+
+    if (entity === 'users') {
+      const where = {};
+      if (role && ['researcher', 'nonprofit', 'admin'].includes(role)) where.role = role;
+      if (status && ['active', 'pending', 'suspended'].includes(status)) where.account_status = status;
+      if (search) {
+        where[Op.or] = [
+          { name: { [Op.iLike]: `%${search}%` } },
+          { email: { [Op.iLike]: `%${search}%` } }
+        ];
+      }
+      const users = await User.findAll({
+        where,
+        attributes: ['id', 'name', 'email', 'role', 'account_status', 'created_at'],
+        include: [{
+          model: Organization,
+          as: 'organization',
+          attributes: ['name'],
+          required: false
+        }],
+        limit: EXPORT_LIMIT,
+        order: [['created_at', 'DESC']],
+        paranoid: false
+      });
+      headers = ['ID', 'Name', 'Email', 'Role', 'Status', 'Organization', 'Created'];
+      rows = users.map(u => [
+        u.id, u.name, u.email, u.role, u.account_status,
+        u.organization?.name || '', new Date(u.created_at).toISOString()
+      ]);
+    } else if (entity === 'projects') {
+      const where = {};
+      if (status) where.status = status;
+      if (search) {
+        where[Op.or] = [
+          { title: { [Op.iLike]: `%${search}%` } },
+          { problem: { [Op.iLike]: `%${search}%` } }
+        ];
+      }
+      const projects = await Project.findAll({
+        where,
+        include: [{
+          model: Organization,
+          as: 'organization',
+          attributes: ['name'],
+          required: false
+        }],
+        limit: EXPORT_LIMIT,
+        order: [['project_id', 'DESC']]
+      });
+      headers = ['ID', 'Title', 'Organization', 'Status', 'Budget Min', 'Budget Max', 'Timeline'];
+      rows = projects.map(p => [
+        p.project_id, p.title, p.organization?.name || '', p.status,
+        p.budget_min || '', p.budget_max || '', p.timeline || ''
+      ]);
+    } else if (entity === 'milestones') {
+      const where = {};
+      if (status) where.status = status;
+      const milestones = await Milestone.findAll({
+        where,
+        include: [{
+          model: Project,
+          as: 'project',
+          attributes: ['project_id', 'title'],
+          include: [{
+            model: Organization,
+            as: 'organization',
+            attributes: ['name']
+          }]
+        }],
+        limit: EXPORT_LIMIT,
+        order: [['due_date', 'ASC']]
+      });
+      headers = ['ID', 'Name', 'Project', 'Organization', 'Status', 'Due Date', 'Completed At'];
+      rows = milestones.map(m => [
+        m.id, m.name, m.project?.title || '', m.project?.organization?.name || '',
+        m.status, m.due_date || '', m.completed_at ? new Date(m.completed_at).toISOString() : ''
+      ]);
+    } else if (entity === 'organizations') {
+      const where = {};
+      if (search) {
+        where[Op.or] = [
+          { name: { [Op.iLike]: `%${search}%` } },
+          { EIN: { [Op.iLike]: `%${search}%` } }
+        ];
+      }
+      const orgs = await Organization.findAll({
+        where,
+        limit: EXPORT_LIMIT,
+        order: [['id', 'DESC']]
+      });
+      headers = ['ID', 'Name', 'EIN', 'Mission', 'Created'];
+      rows = orgs.map(o => [
+        o.id, o.name, o.EIN || '', o.mission || '',
+        o.created_at ? new Date(o.created_at).toISOString() : ''
+      ]);
+    }
+
+    // Build CSV with proper escaping
+    const escapeCsv = (val) => {
+      const str = String(val ?? '');
+      if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+        return '"' + str.replace(/"/g, '""') + '"';
+      }
+      return str;
+    };
+
+    const csvLines = [headers.map(escapeCsv).join(',')];
+    for (const row of rows) {
+      csvLines.push(row.map(escapeCsv).join(','));
+    }
+    const csv = csvLines.join('\n');
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="${entity}-export-${new Date().toISOString().slice(0, 10)}.csv"`);
+    res.status(200).send(csv);
+  } catch (error) {
+    console.error('Export admin data error:', error);
+    res.status(500).json({ error: 'Failed to export data' });
+  }
+};
+
 module.exports = {
   getDashboardStats,
   getAllUsers,
@@ -1300,5 +1556,7 @@ module.exports = {
   requestProjectChanges,
   getAllAttachments,
   getAttachmentStats,
-  forceDeleteAttachment
+  forceDeleteAttachment,
+  getAdminAlerts,
+  exportAdminData
 };
