@@ -58,4 +58,10 @@ router.put('/ratings/:ratingId/moderate', ratingController.moderateRating);
 router.get('/agreements', agreementController.adminListAgreements);
 router.get('/agreements/stats', agreementController.adminAgreementStats);
 
+// SLA Alerts (UC12)
+router.get('/alerts', adminController.getAdminAlerts);
+
+// Data Export (UC12)
+router.get('/export/:entity', adminController.exportAdminData);
+
 module.exports = router;
