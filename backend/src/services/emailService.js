@@ -44,7 +44,7 @@ const transporter = createTransporter();
  * @returns {Promise<Object>} Nodemailer result
  */
 const sendVerificationEmail = async (email, name, verificationToken) => {
-  const verifyLink = `${process.env.APP_URL || 'http://localhost:3000'}/verify-email?token=${verificationToken}`;
+  const verifyLink = `${process.env.APP_URL || 'https://trident-frontend-livid.vercel.app'}/verify-email?token=${verificationToken}`;
   
   const html = `
     <!DOCTYPE html>
@@ -135,7 +135,7 @@ const sendVerificationEmail = async (email, name, verificationToken) => {
  * @returns {Promise<Object>} Nodemailer result
  */
 const sendPasswordResetEmail = async (email, name, resetToken) => {
-  const resetLink = `${process.env.APP_URL || 'http://localhost:3000'}/reset-password?token=${resetToken}`;
+  const resetLink = `${process.env.APP_URL || 'https://trident-frontend-livid.vercel.app'}/reset-password?token=${resetToken}`;
   
   const html = `
     <!DOCTYPE html>
@@ -226,7 +226,7 @@ const sendPasswordResetEmail = async (email, name, resetToken) => {
  * @returns {Promise<Object>} Nodemailer result
  */
 const sendNotificationEmail = async (email, name, { type, title, message, link }) => {
-  const actionLink = link ? `${process.env.APP_URL || 'http://localhost:3000'}${link}` : null;
+  const actionLink = link ? `${process.env.APP_URL || 'https://trident-frontend-livid.vercel.app'}${link}` : null;
   
   const html = `
     <!DOCTYPE html>
@@ -409,7 +409,7 @@ const sendWeeklyDigest = async (email, name, digestData) => {
                   <table role="presentation" style="margin: 0 auto;">
                     <tr>
                       <td style="border-radius: 4px; background-color: #00bfa5;">
-                        <a href="${process.env.APP_URL || 'http://localhost:3000'}/dashboard" style="display: inline-block; padding: 14px 32px; color: #ffffff; text-decoration: none; font-size: 16px; font-weight: 600;">View Dashboard</a>
+                        <a href="${process.env.APP_URL || 'https://trident-frontend-livid.vercel.app'}/dashboard" style="display: inline-block; padding: 14px 32px; color: #ffffff; text-decoration: none; font-size: 16px; font-weight: 600;">View Dashboard</a>
                       </td>
                     </tr>
                   </table>
