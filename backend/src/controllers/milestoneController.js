@@ -616,6 +616,13 @@ exports.getMilestoneStats = async (req, res) => {
       return res.status(404).json({ error: 'Project not found' });
     }
 
+    // Authorization: only the owning nonprofit, or an admin, can view stats
+    const isAdmin = req.user.role === 'admin' || req.user.role === 'super_admin';
+    const isOwner = req.user.role === 'nonprofit' && project.org_id === req.user.org_id;
+    if (!isAdmin && !isOwner) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
     // Get all milestones for the project
     const milestones = await Milestone.findAll({
       where: { project_id: projectId }
