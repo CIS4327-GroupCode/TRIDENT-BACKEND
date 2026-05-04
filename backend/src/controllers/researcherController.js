@@ -1,6 +1,11 @@
 const { ResearcherProfile, AcademicHistory, Certification, Application, Project, Organization, User, Rating } = require('../database/models');
 const { logAudit, AUDIT_ACTIONS } = require('../utils/auditLogger');
 const { syncProjectsCompletedForUser } = require('../services/researcherMetricsService');
+const {
+  parseDelimitedList,
+  normalizeResearcherListPayload,
+  normalizeResearcherProfileForResponse,
+} = require('../utils/researcherProfileFields');
 
 function trimStringFields(input = {}) {
   const output = {};
@@ -12,19 +17,6 @@ function trimStringFields(input = {}) {
 }
 
 /**
- * Parse comma-separated string into array
- * @param {string} str - Comma-separated string
- * @returns {string[]} Array of values
- */
-function parseCommaSeparated(str) {
-  if (!str || typeof str !== 'string') return [];
-  return str
-    .split(',')
-    .map(item => item.trim())
-    .filter(item => item.length > 0);
-}
-
-/**
  * Calculate profile completeness percentage
  * @param {Object} profile - Researcher profile object
  * @returns {number} Completeness percentage (0-100)
@@ -33,9 +25,9 @@ function computeProfileCompleteness(profile) {
   const fields = [
     { key: 'affiliation',        check: v => !!v },
     { key: 'title',              check: v => !!v },
-    { key: 'expertise',          check: v => parseCommaSeparated(v).length > 0 },
-    { key: 'domains',            check: v => parseCommaSeparated(v).length > 0 },
-    { key: 'methods',            check: v => parseCommaSeparated(v).length > 0 },
+    { key: 'expertise',          check: v => parseDelimitedList(v).length > 0 },
+    { key: 'domains',            check: v => parseDelimitedList(v).length > 0 },
+    { key: 'methods',            check: v => parseDelimitedList(v).length > 0 },
     { key: 'hourly_rate_min',    check: v => !!v && parseFloat(v) > 0 },
     { key: 'research_interests', check: v => v && v.length >= 20 },
     { key: 'availability',       check: v => !!v },
@@ -64,12 +56,15 @@ const getResearcherProfile = async (req, res) => {
     }
 
     const computedProjectsCompleted = await syncProjectsCompletedForUser(userId);
-    profile.setDataValue('projects_completed', computedProjectsCompleted);
+    const normalizedProfile = normalizeResearcherProfileForResponse({
+      ...profile.toJSON(),
+      projects_completed: computedProjectsCompleted,
+    });
 
     // Calculate and include completeness
-    const completeness = computeProfileCompleteness(profile.toJSON());
+    const completeness = computeProfileCompleteness(normalizedProfile);
 
-    return res.status(200).json({ profile, completeness });
+    return res.status(200).json({ profile: normalizedProfile, completeness });
   } catch (error) {
     console.error('Get researcher profile error:', error);
     return res.status(500).json({ error: 'Internal server error' });
@@ -106,7 +101,7 @@ const updateResearcherProfile = async (req, res) => {
     ];
 
     // Filter only allowed fields from request body
-    const updates = {};
+    let updates = {};
     const sanitizedBody = trimStringFields(req.body || {});
     Object.keys(sanitizedBody).forEach(key => {
       if (allowedFields.includes(key) && sanitizedBody[key] !== undefined) {
@@ -131,12 +126,16 @@ const updateResearcherProfile = async (req, res) => {
       return res.status(404).json({ error: 'Researcher profile not found' });
     }
 
+    updates = normalizeResearcherListPayload(updates);
+
     // Sync rate aliases for backward compatibility
     if (updates.hourly_rate_min !== undefined) updates.rate_min = updates.hourly_rate_min;
     if (updates.hourly_rate_max !== undefined) updates.rate_max = updates.hourly_rate_max;
 
     // Update profile
     await profile.update(updates);
+
+    const normalizedProfile = normalizeResearcherProfileForResponse(profile.toJSON());
 
     void logAudit({
       actorId: userId,
@@ -147,11 +146,11 @@ const updateResearcherProfile = async (req, res) => {
     });
 
     // Calculate and include completeness
-    const completeness = computeProfileCompleteness(profile.toJSON());
+    const completeness = computeProfileCompleteness(normalizedProfile);
 
     return res.status(200).json({ 
       message: 'Researcher profile updated successfully',
-      profile,
+      profile: normalizedProfile,
       completeness
     });
   } catch (error) {
@@ -576,7 +575,10 @@ const getResearcherProfileById = async (req, res) => {
     }
 
     const computedProjectsCompleted = await syncProjectsCompletedForUser(id);
-    profile.setDataValue('projects_completed', computedProjectsCompleted);
+    const normalizedProfile = normalizeResearcherProfileForResponse({
+      ...profile.toJSON(),
+      projects_completed: computedProjectsCompleted,
+    });
 
     // Fetch academic history and certifications
     const academics = await AcademicHistory.findAll({
@@ -590,7 +592,7 @@ const getResearcherProfileById = async (req, res) => {
     });
 
     return res.status(200).json({
-      profile: profile.toSafeObject(),
+      profile: normalizedProfile,
       user: user.toSafeObject(),
       academics,
       certifications
