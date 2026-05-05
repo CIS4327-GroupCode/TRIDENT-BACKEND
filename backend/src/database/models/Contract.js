@@ -65,6 +65,29 @@ Contract.init(
         isIn: [['NDA', 'DUA', 'SOW']]
       }
     },
+    template_version_id: {
+      type: DataTypes.STRING(100),
+      allowNull: true,
+      field: 'template_version_id'
+    },
+    source_kind: {
+      type: DataTypes.ENUM('template', 'attachment', 'free_text'),
+      allowNull: false,
+      defaultValue: 'template',
+      field: 'source_kind',
+      validate: {
+        isIn: [['template', 'attachment', 'free_text']]
+      }
+    },
+    uploaded_attachment_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      references: {
+        model: 'project_attachments',
+        key: 'id'
+      },
+      field: 'uploaded_attachment_id'
+    },
     title: {
       type: DataTypes.STRING(255),
       allowNull: false,
@@ -73,12 +96,72 @@ Contract.init(
       }
     },
     status: {
-      type: DataTypes.ENUM('draft', 'pending_signature', 'signed', 'active', 'terminated', 'expired'),
+      type: DataTypes.ENUM(
+        'draft',
+        'internal_review',
+        'counterparty_review',
+        'changes_requested',
+        'approved_for_signature',
+        'pending_signature',
+        'executed',
+        'effective',
+        'active',
+        'completed',
+        'terminated',
+        'expired',
+        'archived'
+      ),
       allowNull: false,
       defaultValue: 'draft',
       validate: {
-        isIn: [['draft', 'pending_signature', 'signed', 'active', 'terminated', 'expired']]
+        isIn: [[
+          'draft',
+          'internal_review',
+          'counterparty_review',
+          'changes_requested',
+          'approved_for_signature',
+          'pending_signature',
+          'executed',
+          'effective',
+          'active',
+          'completed',
+          'terminated',
+          'expired',
+          'archived'
+        ]]
       }
+    },
+    review_required: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+      field: 'review_required'
+    },
+    contains_sensitive_data: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+      field: 'contains_sensitive_data'
+    },
+    data_classification: {
+      type: DataTypes.ENUM('public', 'internal', 'confidential', 'restricted'),
+      allowNull: false,
+      defaultValue: 'internal',
+      field: 'data_classification'
+    },
+    retention_period_days: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      field: 'retention_period_days',
+      validate: {
+        min: 1
+      }
+    },
+    destruction_required: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+      field: 'destruction_required'
     },
     variables: {
       type: DataTypes.JSONB,
@@ -90,10 +173,25 @@ Contract.init(
       allowNull: false,
       field: 'rendered_content'
     },
+    content_snapshot: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+      field: 'content_snapshot'
+    },
     storage_key: {
       type: DataTypes.STRING(512),
       allowNull: true,
       field: 'storage_key'
+    },
+    executed_filename: {
+      type: DataTypes.STRING(255),
+      allowNull: true,
+      field: 'executed_filename'
+    },
+    executed_mimetype: {
+      type: DataTypes.STRING(255),
+      allowNull: true,
+      field: 'executed_mimetype'
     },
     checksum: {
       type: DataTypes.STRING(128),
@@ -142,6 +240,63 @@ Contract.init(
       type: DataTypes.DATE,
       allowNull: true,
       field: 'expires_at'
+    },
+    effective_at: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      field: 'effective_at'
+    },
+    completed_at: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      field: 'completed_at'
+    },
+    archived_at: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      field: 'archived_at'
+    },
+    parent_contract_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      references: {
+        model: 'contracts',
+        key: 'id'
+      },
+      field: 'parent_contract_id'
+    },
+    root_contract_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      references: {
+        model: 'contracts',
+        key: 'id'
+      },
+      field: 'root_contract_id'
+    },
+    supersedes_contract_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      references: {
+        model: 'contracts',
+        key: 'id'
+      },
+      field: 'supersedes_contract_id'
+    },
+    version_number: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      defaultValue: 1,
+      field: 'version_number',
+      validate: {
+        min: 1
+      }
+    },
+    is_current_version: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: true,
+      field: 'is_current_version'
     },
     metadata: {
       type: DataTypes.JSONB,

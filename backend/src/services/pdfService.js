@@ -152,6 +152,27 @@ async function generatePdf(templateType, variables = {}) {
   };
 }
 
+async function generatePdfFromText(title, textContent) {
+  const normalizedTitle = String(title || 'Agreement').trim() || 'Agreement';
+  const normalizedText = String(textContent || '').trim();
+
+  if (!normalizedText) {
+    throw new Error('Agreement text content is required');
+  }
+
+  const buffer = await generatePdfBufferFromText(normalizedText, normalizedTitle);
+  const checksum = crypto
+    .createHash('sha256')
+    .update(buffer)
+    .digest('hex');
+
+  return {
+    buffer,
+    checksum,
+    preview: normalizedText
+  };
+}
+
 function getAvailableTemplates() {
   return Object.entries(TEMPLATE_DEFINITIONS).map(([key, value]) => ({
     type: key,
@@ -163,5 +184,6 @@ function getAvailableTemplates() {
 module.exports = {
   getAvailableTemplates,
   renderTemplatePreview,
-  generatePdf
+  generatePdf,
+  generatePdfFromText
 };
