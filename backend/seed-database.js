@@ -1674,7 +1674,7 @@ async function seedDatabase() {
         // Agreements / Contracts
         'agreement_created',
         'agreement_pending_signature',
-        'agreement_signed',
+        'agreement_executed',
         'agreement_activated',
         'agreement_terminated',
         // Matching

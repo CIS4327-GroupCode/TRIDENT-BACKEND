@@ -13,6 +13,7 @@ const MessageAttachment = require('./MessageAttachment');
 const AuditLog = require('./AuditLog');
 const UserPreferences = require('./UserPreferences');
 const ProjectReview = require('./ProjectReview');
+const ContractReview = require('./ContractReview');
 const SavedProject = require('./SavedProject');
 const AcademicHistory = require('./AcademicHistory');
 const Certification = require('./Certification');
@@ -223,6 +224,23 @@ Contract.belongsTo(User, { foreignKey: 'researcher_user_id', as: 'researcherUser
 User.hasMany(Contract, { foreignKey: 'terminated_by', as: 'terminatedContracts' });
 Contract.belongsTo(User, { foreignKey: 'terminated_by', as: 'terminator' });
 
+// Attachment <-> Contract (uploaded source document)
+Attachment.hasMany(Contract, { foreignKey: 'uploaded_attachment_id', as: 'sourcedContracts' });
+Contract.belongsTo(Attachment, { foreignKey: 'uploaded_attachment_id', as: 'sourceAttachment' });
+
+// Contract amendment chain
+Contract.belongsTo(Contract, { foreignKey: 'parent_contract_id', as: 'parentContract' });
+Contract.belongsTo(Contract, { foreignKey: 'root_contract_id', as: 'rootContract' });
+Contract.belongsTo(Contract, { foreignKey: 'supersedes_contract_id', as: 'supersededContract' });
+
+// Contract <-> ContractReview
+Contract.hasMany(ContractReview, { foreignKey: 'contract_id', as: 'reviews' });
+ContractReview.belongsTo(Contract, { foreignKey: 'contract_id', as: 'contract' });
+
+// User <-> ContractReview
+User.hasMany(ContractReview, { foreignKey: 'reviewer_id', as: 'contractReviews' });
+ContractReview.belongsTo(User, { foreignKey: 'reviewer_id', as: 'reviewer' });
+
 module.exports = {
   User,
   Organization,
@@ -239,6 +257,7 @@ module.exports = {
   AuditLog,
   UserPreferences,
   ProjectReview,
+  ContractReview,
   SavedProject,
   AcademicHistory,
   Certification,

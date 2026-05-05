@@ -85,9 +85,18 @@ Notification.init(
           'invitation',
           // Agreement/Contract events
           'agreement_created',
+          'agreement_submitted_for_review',
+          'agreement_review_approved',
+          'agreement_changes_requested',
+          'agreement_approved_for_signature',
           'agreement_pending_signature',
           'agreement_signed',
+          'agreement_executed',
+          'agreement_effective',
           'agreement_activated',
+          'agreement_completed',
+          'agreement_archived',
+          'agreement_amendment_created',
           'agreement_terminated',
           // Matching events
           'new_match_available',
