@@ -561,10 +561,10 @@ const createProject = async (req, res) => {
     }
 
     // Validate status if provided
-    const validStatuses = ['draft', 'open', 'in_progress', 'completed', 'cancelled'];
+    const validStatuses = ['draft', 'open'];
     if (status && !validStatuses.includes(status)) {
       return res.status(400).json({
-        error: `Status must be one of: ${validStatuses.join(', ')}`,
+        error: `New projects can only start with status: ${validStatuses.join(', ')}`,
       });
     }
 

@@ -10,10 +10,37 @@ function trimStringFields(input = {}) {
   return output;
 }
 
+function normalizeWebsite(urlValue) {
+  if (typeof urlValue !== 'string') {
+    return null;
+  }
+
+  const trimmed = urlValue.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+}
+
 function isValidWebsite(urlValue) {
   try {
     const url = new URL(urlValue);
-    return url.protocol === 'http:' || url.protocol === 'https:';
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      return false;
+    }
+
+    const hostname = String(url.hostname || '').toLowerCase();
+    if (!hostname) {
+      return false;
+    }
+
+    const isLocalhost = hostname === 'localhost';
+    const isIpv4 = /^\d{1,3}(\.\d{1,3}){3}$/.test(hostname)
+      && hostname.split('.').every((segment) => Number(segment) >= 0 && Number(segment) <= 255);
+    const isDomain = hostname.includes('.');
+
+    return isLocalhost || isIpv4 || isDomain;
   } catch (error) {
     return false;
   }
@@ -89,8 +116,12 @@ const updateOrganization = async (req, res) => {
       }
     });
 
-    if (updates.website && !isValidWebsite(updates.website)) {
-      return res.status(400).json({ error: 'Website must be a valid http(s) URL' });
+    if (updates.website !== undefined) {
+      const normalizedWebsite = normalizeWebsite(updates.website);
+      if (normalizedWebsite && !isValidWebsite(normalizedWebsite)) {
+        return res.status(400).json({ error: 'Website must be a valid http(s) URL' });
+      }
+      updates.website = normalizedWebsite;
     }
 
     if (updates.team_size !== undefined) {

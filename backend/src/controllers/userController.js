@@ -40,7 +40,7 @@ const getUserProfile = async (req, res) => {
         {
           model: ResearcherProfile,
           as: 'researcherProfile',
-          attributes: ['id', 'title', 'institution', 'expertise', 'research_interests', 'projects_completed', 'hourly_rate_min', 'hourly_rate_max']
+          attributes: ['user_id', 'title', 'institution', 'expertise', 'research_interests', 'projects_completed', 'hourly_rate_min', 'hourly_rate_max']
         }
       ]
     });
