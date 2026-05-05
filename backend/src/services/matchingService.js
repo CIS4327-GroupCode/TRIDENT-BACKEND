@@ -19,6 +19,7 @@ const Organization = require('../database/models/Organization');
 const User = require('../database/models/User');
 const Match = require('../database/models/Match');
 const Application = require('../database/models/Application');
+const { parseDelimitedList } = require('../utils/researcherProfileFields');
 
 /**
  * Parse comma-separated string into array of lowercase trimmed values
@@ -26,11 +27,7 @@ const Application = require('../database/models/Application');
  * @returns {string[]} Array of values
  */
 function parseCommaSeparated(str) {
-  if (!str || typeof str !== 'string') return [];
-  return str
-    .split(',')
-    .map(item => item.trim().toLowerCase())
-    .filter(item => item.length > 0);
+  return parseDelimitedList(str).map((item) => item.toLowerCase());
 }
 
 function parseComplianceCertifications(value) {

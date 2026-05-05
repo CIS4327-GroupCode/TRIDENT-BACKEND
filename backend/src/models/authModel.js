@@ -1,4 +1,5 @@
 const { User, Organization, ResearcherProfile } = require("../database/models");
+const { serializeDelimitedList } = require('../utils/researcherProfileFields');
 
 const parseArrayField = (value) => {
   if (Array.isArray(value)) return value;
@@ -53,14 +54,24 @@ const createUser = async (name, email, password_hash, role, mfa_enabled, organiz
 
       // If researcher, create researcher profile
       if (role === 'researcher' && researcherData) {
+        const normalizedDomains = serializeDelimitedList(researcherData.domains);
+        const normalizedMethods = serializeDelimitedList(researcherData.methods);
+        const normalizedTools = serializeDelimitedList(researcherData.tools);
+        const normalizedExpertise = serializeDelimitedList(researcherData.expertise || researcherData.domains);
+        const hourlyRateMin = researcherData.hourly_rate_min ?? researcherData.rate_min ?? null;
+        const hourlyRateMax = researcherData.hourly_rate_max ?? researcherData.rate_max ?? null;
+
         await ResearcherProfile.create({
           user_id: user.id,
           affiliation: researcherData.affiliation || null,
-          domains: researcherData.domains ? JSON.stringify(researcherData.domains) : null,
-          methods: researcherData.methods ? JSON.stringify(researcherData.methods) : null,
-          tools: researcherData.tools ? JSON.stringify(researcherData.tools) : null,
-          rate_min: researcherData.rate_min || null,
-          rate_max: researcherData.rate_max || null,
+          domains: normalizedDomains,
+          methods: normalizedMethods,
+          tools: normalizedTools,
+          expertise: normalizedExpertise,
+          rate_min: hourlyRateMin,
+          rate_max: hourlyRateMax,
+          hourly_rate_min: hourlyRateMin,
+          hourly_rate_max: hourlyRateMax,
           availability: researcherData.availability || null
         }, { transaction });
       }

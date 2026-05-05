@@ -349,7 +349,7 @@ exports.rejectApplication = async (req, res) => {
 exports.getResearcherApplications = async (req, res) => {
   try {
     const userId = req.user.id;
-    const { status } = req.query;
+    const { status, type } = req.query;
 
     // Verify user is researcher
     const user = await User.findByPk(userId);
@@ -369,6 +369,9 @@ exports.getResearcherApplications = async (req, res) => {
     if (status) {
       where.status = status;
     }
+    if (type) {
+      where.type = type;
+    }
 
     // Get applications
     const applications = await Application.findAll({
@@ -378,6 +381,11 @@ exports.getResearcherApplications = async (req, res) => {
           model: Organization,
           as: 'organization',
           attributes: ['id', 'name', 'mission']
+        },
+        {
+          model: Project,
+          as: 'project',
+          attributes: ['project_id', 'title', 'status', 'timeline', 'budget_min', 'budget_max']
         }
       ],
       order: [['created_at', 'DESC']]
