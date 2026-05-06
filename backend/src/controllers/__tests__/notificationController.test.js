@@ -197,7 +197,7 @@ describe('Notification Controller - Real-World Flows', () => {
 
       expect(Notification.findAndCountAll).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: expect.objectContaining({ is_read: false })
+          where: expect.objectContaining({ is_read: false, archived: false })
         })
       );
     });
@@ -231,9 +231,31 @@ describe('Notification Controller - Real-World Flows', () => {
 
       expect(Notification.findAndCountAll).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: expect.objectContaining({ type: 'milestone_created' })
+          where: expect.objectContaining({ type: 'milestone_created', archived: false })
         })
       );
+    });
+
+    test('excludes archived notifications from active inbox queries', async () => {
+      Notification.findAndCountAll.mockResolvedValue({
+        count: 0,
+        rows: []
+      });
+
+      Notification.count.mockResolvedValue(0);
+
+      await request(app)
+        .get('/api/notifications')
+        .expect(200);
+
+      expect(Notification.findAndCountAll).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ user_id: 1, archived: false })
+        })
+      );
+      expect(Notification.count).toHaveBeenCalledWith({
+        where: { user_id: 1, is_read: false, archived: false }
+      });
     });
   });
 
@@ -289,7 +311,7 @@ describe('Notification Controller - Real-World Flows', () => {
         .expect(404);
 
       expect(Notification.findOne).toHaveBeenCalledWith({
-        where: { id: '10', user_id: 1 }
+        where: { id: '10', user_id: 1, archived: false }
       });
     });
   });
@@ -306,7 +328,7 @@ describe('Notification Controller - Real-World Flows', () => {
       expect(response.body.updatedCount).toBe(5);
       expect(Notification.update).toHaveBeenCalledWith(
         { is_read: true },
-        { where: { user_id: 1, is_read: false } }
+        { where: { user_id: 1, is_read: false, archived: false } }
       );
     });
 
@@ -360,7 +382,7 @@ describe('Notification Controller - Real-World Flows', () => {
 
       expect(response.body.unreadCount).toBe(7);
       expect(Notification.count).toHaveBeenCalledWith({
-        where: { user_id: 1, is_read: false }
+        where: { user_id: 1, is_read: false, archived: false }
       });
     });
 

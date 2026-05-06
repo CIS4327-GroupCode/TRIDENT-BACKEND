@@ -20,7 +20,7 @@ exports.getNotifications = async (req, res) => {
     const parsedOffset = Math.max(parseInt(offset), 0);
 
     // Build query conditions
-    const where = { user_id: userId };
+    const where = { user_id: userId, archived: false };
     
     if (unread === 'true') {
       where.is_read = false;
@@ -52,7 +52,7 @@ exports.getNotifications = async (req, res) => {
 
     // Get unread count
     const unreadCount = await Notification.count({
-      where: { user_id: userId, is_read: false }
+      where: { user_id: userId, is_read: false, archived: false }
     });
 
     res.json({
@@ -81,7 +81,7 @@ exports.getUnreadCount = async (req, res) => {
     const userId = req.user.id;
     
     const unreadCount = await Notification.count({
-      where: { user_id: userId, is_read: false }
+      where: { user_id: userId, is_read: false, archived: false }
     });
     
     res.json({ unreadCount });
@@ -104,7 +104,7 @@ exports.markAsRead = async (req, res) => {
     const userId = req.user.id;
 
     const notification = await Notification.findOne({
-      where: { id, user_id: userId }
+      where: { id, user_id: userId, archived: false }
     });
 
     if (!notification) {
@@ -139,7 +139,7 @@ exports.markAsUnread = async (req, res) => {
     const userId = req.user.id;
 
     const notification = await Notification.findOne({
-      where: { id, user_id: userId }
+      where: { id, user_id: userId, archived: false }
     });
 
     if (!notification) {
@@ -174,7 +174,7 @@ exports.markAllAsRead = async (req, res) => {
 
     const [updatedCount] = await Notification.update(
       { is_read: true },
-      { where: { user_id: userId, is_read: false } }
+      { where: { user_id: userId, is_read: false, archived: false } }
     );
 
     res.json({ 
@@ -200,7 +200,7 @@ exports.deleteNotification = async (req, res) => {
     const userId = req.user.id;
 
     const notification = await Notification.findOne({
-      where: { id, user_id: userId }
+      where: { id, user_id: userId, archived: false }
     });
 
     if (!notification) {
@@ -232,7 +232,7 @@ exports.deleteAllRead = async (req, res) => {
     const userId = req.user.id;
 
     const deletedCount = await Notification.destroy({
-      where: { user_id: userId, is_read: true }
+      where: { user_id: userId, is_read: true, archived: false }
     });
 
     res.json({ 

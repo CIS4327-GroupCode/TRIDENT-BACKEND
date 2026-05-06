@@ -1,7 +1,22 @@
 {
   "version": 2,
+  "$schema": "https://openapi.vercel.sh/vercel.json",
   "buildCommand": "npm ci --omit=dev && npm run migrate",
   "devCommand": "npm run dev",
+  "crons": [
+    {
+      "path": "/api/cron/notification-cleanup",
+      "schedule": "0 2 * * *"
+    },
+    {
+      "path": "/api/cron/milestone-deadlines",
+      "schedule": "0 8 * * *"
+    },
+    {
+      "path": "/api/cron/match-generation",
+      "schedule": "0 3 * * *"
+    }
+  ],
   "builds": [
     {
       "src": "src/index.js",

@@ -210,8 +210,26 @@ const updateUserStatus = async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
+    const previousStatus = user.account_status;
+
     user.account_status = status;
     await user.save();
+
+    try {
+      await notificationService.createNotification({
+        userId: user.id,
+        type: 'account_status_changed',
+        title: 'Account Status Updated',
+        message: `Your account status changed from ${previousStatus} to ${status}.`,
+        link: '/settings',
+        metadata: {
+          previous_status: previousStatus,
+          new_status: status,
+        },
+      });
+    } catch (notifError) {
+      console.error('Failed to create account status notification:', notifError);
+    }
 
     res.status(200).json({ 
       message: `User status updated to ${status}`,
@@ -295,6 +313,22 @@ const unsuspendUser = async (req, res) => {
     }
 
     await user.restore();
+
+    try {
+      await notificationService.createNotification({
+        userId: user.id,
+        type: 'account_status_changed',
+        title: 'Account Restored',
+        message: 'Your account has been restored and is active again.',
+        link: '/settings',
+        metadata: {
+          previous_status: 'suspended',
+          new_status: 'active',
+        },
+      });
+    } catch (notifError) {
+      console.error('Failed to create unsuspension notification:', notifError);
+    }
 
     res.status(200).json({ 
       message: 'User account unsuspended successfully',

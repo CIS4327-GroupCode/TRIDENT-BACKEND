@@ -2,6 +2,65 @@ const Notification = require('../database/models/Notification');
 const { User, UserPreferences } = require('../database/models');
 const emailService = require('./emailService');
 
+const INAPP_TYPE_TO_PREFERENCE = {
+  'message_received': 'inapp_messages',
+  'new_match_available': 'inapp_matches',
+  'milestone_created': 'inapp_notifications',
+  'milestone_updated': 'inapp_notifications',
+  'milestone_completed': 'inapp_notifications',
+  'milestone_deadline_approaching': 'inapp_notifications',
+  'milestone_overdue': 'inapp_notifications',
+  'project_created': 'inapp_notifications',
+  'project_updated': 'inapp_notifications',
+  'project_status_changed': 'inapp_notifications',
+  'project_deleted': 'inapp_notifications',
+  'project_submitted_for_review': 'inapp_notifications',
+  'project_approved': 'inapp_notifications',
+  'project_rejected': 'inapp_notifications',
+  'project_application': 'inapp_notifications',
+  'application_received': 'inapp_notifications',
+  'application_accepted': 'inapp_notifications',
+  'application_rejected': 'inapp_notifications',
+  'invitation': 'inapp_notifications',
+  'rating_received': 'inapp_notifications',
+  'rating_moderated': 'inapp_notifications',
+  'agreement_created': 'inapp_notifications',
+  'agreement_submitted_for_review': 'inapp_notifications',
+  'agreement_review_approved': 'inapp_notifications',
+  'agreement_changes_requested': 'inapp_notifications',
+  'agreement_approved_for_signature': 'inapp_notifications',
+  'agreement_pending_signature': 'inapp_notifications',
+  'agreement_signed': 'inapp_notifications',
+  'agreement_executed': 'inapp_notifications',
+  'agreement_effective': 'inapp_notifications',
+  'agreement_activated': 'inapp_notifications',
+  'agreement_completed': 'inapp_notifications',
+  'agreement_archived': 'inapp_notifications',
+  'agreement_amendment_created': 'inapp_notifications',
+  'agreement_terminated': 'inapp_notifications',
+  'user_suspended': 'inapp_notifications',
+  'security': 'inapp_notifications',
+  'system_announcement': 'inapp_notifications'
+};
+
+const EMAIL_TYPE_TO_PREFERENCE = {
+  'message_received': 'email_messages',
+  'new_match_available': 'email_matches',
+  'milestone_created': 'email_milestones',
+  'milestone_updated': 'email_milestones',
+  'milestone_completed': 'email_milestones',
+  'milestone_deadline_approaching': 'email_milestones',
+  'milestone_overdue': 'email_milestones',
+  'project_created': 'email_project_updates',
+  'project_updated': 'email_project_updates',
+  'project_status_changed': 'email_project_updates',
+  'project_deleted': 'email_project_updates',
+  'project_submitted_for_review': 'email_project_updates',
+  'project_approved': 'email_project_updates',
+  'project_rejected': 'email_project_updates',
+  'project_application': 'email_project_updates'
+};
+
 /**
  * Notification Service
  * Provides helper functions for creating and managing notifications
@@ -27,53 +86,29 @@ const isNotificationEnabled = (preferences, notificationType) => {
   }
 
   // Map notification types to preference fields for granular control
-  const typeToPreference = {
-    'message_received': 'inapp_messages',
-    'new_match_available': 'inapp_matches',
-    'milestone_created': 'inapp_notifications',
-    'milestone_updated': 'inapp_notifications',
-    'milestone_completed': 'inapp_notifications',
-    'milestone_deadline_approaching': 'inapp_notifications',
-    'milestone_overdue': 'inapp_notifications',
-    'project_created': 'inapp_notifications',
-    'project_updated': 'inapp_notifications',
-    'project_status_changed': 'inapp_notifications',
-    'project_deleted': 'inapp_notifications',
-    'project_submitted_for_review': 'inapp_notifications',
-    'project_approved': 'inapp_notifications',
-    'project_rejected': 'inapp_notifications',
-    'project_application': 'inapp_notifications',
-    'application_received': 'inapp_notifications',
-    'application_accepted': 'inapp_notifications',
-    'application_rejected': 'inapp_notifications',
-    'invitation': 'inapp_notifications',
-    'rating_received': 'inapp_notifications',
-    'review_moderated': 'inapp_notifications',
-    'agreement_created': 'inapp_notifications',
-    'agreement_submitted_for_review': 'inapp_notifications',
-    'agreement_review_approved': 'inapp_notifications',
-    'agreement_changes_requested': 'inapp_notifications',
-    'agreement_approved_for_signature': 'inapp_notifications',
-    'agreement_pending_signature': 'inapp_notifications',
-    'agreement_signed': 'inapp_notifications',
-    'agreement_executed': 'inapp_notifications',
-    'agreement_effective': 'inapp_notifications',
-    'agreement_activated': 'inapp_notifications',
-    'agreement_completed': 'inapp_notifications',
-    'agreement_archived': 'inapp_notifications',
-    'agreement_amendment_created': 'inapp_notifications',
-    'agreement_terminated': 'inapp_notifications',
-    'user_suspended': 'inapp_notifications',
-    'security': 'inapp_notifications',
-    'system_announcement': 'inapp_notifications'
-  };
-
-  const preferenceField = typeToPreference[notificationType];
+  const preferenceField = INAPP_TYPE_TO_PREFERENCE[notificationType];
   if (preferenceField && preferences[preferenceField] === false) {
     return false;
   }
 
   // Default to enabled if no specific preference
+  return true;
+};
+
+const isEmailNotificationEnabled = (preferences, notificationType) => {
+  if (!preferences) {
+    return false;
+  }
+
+  if (preferences.email_notifications === false) {
+    return false;
+  }
+
+  const preferenceField = EMAIL_TYPE_TO_PREFERENCE[notificationType];
+  if (preferenceField && preferences[preferenceField] === false) {
+    return false;
+  }
+
   return true;
 };
 
@@ -157,7 +192,7 @@ const createNotification = async ({ userId, type, title, message, link, metadata
     });
 
     // Send email notification if user has email notifications enabled
-    if (preferences && preferences.email_notifications) {
+    if (isEmailNotificationEnabled(preferences, type)) {
       try {
         const user = await User.findByPk(userId);
         if (user && user.email) {
@@ -238,7 +273,7 @@ const createBulkNotifications = async (userIds, { type, title, message, link, me
     const created = await Notification.bulkCreate(notifications);
 
     // Send email notifications for users who have email notifications enabled
-    const emailPrefs = userPrefs.filter(pref => pref.email_notifications);
+    const emailPrefs = userPrefs.filter(pref => isEmailNotificationEnabled(pref, type));
     if (emailPrefs.length > 0) {
       const emailUserIds = emailPrefs.map(pref => pref.user_id);
       

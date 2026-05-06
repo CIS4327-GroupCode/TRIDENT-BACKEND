@@ -7,6 +7,7 @@ const {
   MessageAttachment,
   User,
 } = require('../database/models');
+const notificationService = require('./notificationService');
 const { encryptMessage, decryptMessage } = require('../utils/encryption');
 
 const MESSAGE_DECRYPTION_PLACEHOLDER = '[Message could not be decrypted]';
@@ -489,11 +490,33 @@ async function sendMessage({ threadId, senderId, body, attachments = [] }) {
     throw new Error('NOT_THREAD_MEMBER');
   }
 
+  const recipientParticipants = await ThreadParticipant.findAll({
+    where: {
+      thread_id: normalizedThreadId,
+      user_id: { [Op.ne]: normalizedSenderId },
+    },
+    attributes: ['user_id'],
+  });
+
+  const recipientIds = Array.from(
+    new Set(
+      recipientParticipants
+        .map((participant) => Number(participant.user_id))
+        .filter((participantId) => Number.isInteger(participantId) && participantId > 0)
+    )
+  );
+
+  const sender = await User.findByPk(normalizedSenderId, {
+    attributes: getSelectableUserAttributes(),
+  });
+
+  const senderDisplayName = getUserDisplayName(sender);
+
   const encryptedBody = trimmedBody
     ? encryptMessage(trimmedBody, process.env.MSG_SECRET)
     : '';
 
-  return sequelize.transaction(async (transaction) => {
+  const result = await sequelize.transaction(async (transaction) => {
     const createdMessage = await Message.create(
       {
         thread_id: normalizedThreadId,
@@ -569,6 +592,26 @@ async function sendMessage({ threadId, senderId, body, attachments = [] }) {
       },
     };
   });
+
+  if (recipientIds.length > 0) {
+    await notificationService.createBulkNotifications(recipientIds, {
+      type: 'message_received',
+      title: 'New Message',
+      message: `${senderDisplayName} sent you a message`,
+      link: `/messages?thread=${normalizedThreadId}`,
+      metadata: {
+        thread_id: normalizedThreadId,
+        sender_id: normalizedSenderId,
+        sender_name: senderDisplayName,
+        thread_type: thread.thread_type,
+        thread_name: thread.name || null,
+        project_id: thread.project_id || null,
+        has_attachments: safeAttachments.length > 0,
+      },
+    });
+  }
+
+  return result;
 }
 
 async function markThreadRead(threadId, userId) {
