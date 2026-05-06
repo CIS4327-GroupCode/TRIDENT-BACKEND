@@ -21,6 +21,9 @@ jest.mock('../../src/database/models', () => ({
   Project: {},
   User: {
     findAll: jest.fn()
+  },
+  sequelize: {
+    transaction: jest.fn()
   }
 }));
 
@@ -65,10 +68,28 @@ jest.mock('../../src/utils/auditLogger', () => ({
   logAudit: jest.fn().mockResolvedValue(undefined)
 }));
 
+jest.mock('../../src/utils/agreementObservability', () => ({
+  recordTransitionStart: jest.fn(),
+  recordTransitionOutcome: jest.fn(),
+  inspectAgreementForAnomalies: jest.fn(),
+  recordAnomaly: jest.fn(),
+  getAgreementObservabilitySnapshot: jest.fn(() => ({
+    transitions: { create_agreement: { success: 1 } },
+    recent_anomalies: []
+  }))
+}));
+
 const agreementController = require('../../src/controllers/agreementController');
-const { Contract, ContractReview, Application, Attachment, User } = require('../../src/database/models');
+const { Contract, ContractReview, Application, Attachment, User, sequelize } = require('../../src/database/models');
 const notificationService = require('../../src/services/notificationService');
 const pdfService = require('../../src/services/pdfService');
+const { getAgreementObservabilitySnapshot } = require('../../src/utils/agreementObservability');
+
+const transactionMock = {
+  LOCK: {
+    UPDATE: 'UPDATE'
+  }
+};
 
 function createRes() {
   return {
@@ -151,6 +172,7 @@ describe('agreementController lifecycle', () => {
     adapterMock.save.mockReset();
     adapterMock.exists.mockReset();
     adapterMock.getReadStream.mockReset();
+    sequelize.transaction.mockImplementation(async (callback) => callback(transactionMock));
     Contract.update.mockResolvedValue([1]);
     ContractReview.create.mockResolvedValue(makeReview());
     User.findAll.mockResolvedValue([{ id: 90 }, { id: 91 }]);
@@ -191,6 +213,15 @@ describe('agreementController lifecycle', () => {
 
     await agreementController.createAgreement(req, res);
 
+    expect(sequelize.transaction).toHaveBeenCalledTimes(1);
+    expect(Application.findByPk).toHaveBeenCalledWith(3, expect.objectContaining({
+      transaction: transactionMock,
+      lock: 'UPDATE'
+    }));
+    expect(Contract.findOne).toHaveBeenCalledWith(expect.objectContaining({
+      transaction: transactionMock,
+      lock: 'UPDATE'
+    }));
     expect(Contract.create).toHaveBeenCalledWith(expect.objectContaining({
       template_type: 'NDA',
       template_version_id: 'NDA:v1',
@@ -198,7 +229,7 @@ describe('agreementController lifecycle', () => {
       contains_sensitive_data: true,
       data_classification: 'confidential',
       retention_period_days: 90
-    }));
+    }), expect.objectContaining({ transaction: transactionMock }));
     expect(res.status).toHaveBeenCalledWith(201);
   });
 
@@ -210,13 +241,19 @@ describe('agreementController lifecycle', () => {
 
     await agreementController.submitAgreementForReview(req, res);
 
+    expect(sequelize.transaction).toHaveBeenCalledTimes(1);
+    expect(Contract.findByPk).toHaveBeenCalledWith(10, expect.objectContaining({
+      transaction: transactionMock,
+      lock: 'UPDATE'
+    }));
     expect(contract.status).toBe('internal_review');
+    expect(contract.save).toHaveBeenCalledWith(expect.objectContaining({ transaction: transactionMock }));
     expect(ContractReview.create).toHaveBeenCalledWith(expect.objectContaining({
       contract_id: 10,
       review_stage: 'submission',
       action: 'submitted',
       new_status: 'internal_review'
-    }));
+    }), expect.objectContaining({ transaction: transactionMock }));
     expect(notificationService.createBulkNotifications).toHaveBeenCalled();
   });
 
@@ -243,12 +280,18 @@ describe('agreementController lifecycle', () => {
 
     await agreementController.reviewAgreement(req, res);
 
+    expect(sequelize.transaction).toHaveBeenCalledTimes(1);
+    expect(Contract.findByPk).toHaveBeenCalledWith(10, expect.objectContaining({
+      transaction: transactionMock,
+      lock: 'UPDATE'
+    }));
     expect(contract.status).toBe('counterparty_review');
+    expect(contract.save).toHaveBeenCalledWith(expect.objectContaining({ transaction: transactionMock }));
     expect(ContractReview.create).toHaveBeenCalledWith(expect.objectContaining({
       review_stage: 'internal_review',
       action: 'approved',
       new_status: 'counterparty_review'
-    }));
+    }), expect.objectContaining({ transaction: transactionMock }));
   });
 
   test('reviewAgreement can request changes from internal review', async () => {
@@ -278,7 +321,13 @@ describe('agreementController lifecycle', () => {
 
     await agreementController.counterpartyReviewAgreement(req, res);
 
+    expect(sequelize.transaction).toHaveBeenCalledTimes(1);
+    expect(Contract.findByPk).toHaveBeenCalledWith(10, expect.objectContaining({
+      transaction: transactionMock,
+      lock: 'UPDATE'
+    }));
     expect(contract.status).toBe('approved_for_signature');
+    expect(contract.save).toHaveBeenCalledWith(expect.objectContaining({ transaction: transactionMock }));
     expect(notificationService.createNotification).toHaveBeenCalledWith(expect.objectContaining({
       userId: 7,
       type: 'agreement_approved_for_signature'
@@ -304,7 +353,13 @@ describe('agreementController lifecycle', () => {
 
     await agreementController.signAgreement(req, res);
 
+    expect(sequelize.transaction).toHaveBeenCalledTimes(1);
+    expect(Contract.findByPk).toHaveBeenCalledWith(10, expect.objectContaining({
+      transaction: transactionMock,
+      lock: 'UPDATE'
+    }));
     expect(contract.status).toBe('pending_signature');
+    expect(contract.save).toHaveBeenCalledWith(expect.objectContaining({ transaction: transactionMock }));
     expect(notificationService.createNotification).toHaveBeenCalledWith(expect.objectContaining({
       userId: 11,
       type: 'agreement_pending_signature'
@@ -392,7 +447,13 @@ describe('agreementController lifecycle', () => {
 
     await agreementController.makeAgreementEffective(req, res);
 
+    expect(sequelize.transaction).toHaveBeenCalledTimes(1);
+    expect(Contract.findByPk).toHaveBeenCalledWith(10, expect.objectContaining({
+      transaction: transactionMock,
+      lock: 'UPDATE'
+    }));
     expect(contract.status).toBe('effective');
+    expect(contract.save).toHaveBeenCalledWith(expect.objectContaining({ transaction: transactionMock }));
     expect(notificationService.createNotification).toHaveBeenCalledWith(expect.objectContaining({
       userId: 11,
       type: 'agreement_effective'
@@ -404,7 +465,12 @@ describe('agreementController lifecycle', () => {
 
     Contract.findByPk.mockResolvedValueOnce(mockContract({ status: 'effective' }));
     await agreementController.activateAgreement({ user: { id: 7 }, params: { id: '10' } }, res);
-    expect(Contract.update).toHaveBeenCalled();
+    expect(sequelize.transaction).toHaveBeenCalledTimes(1);
+    expect(Contract.findByPk).toHaveBeenCalledWith(10, expect.objectContaining({
+      transaction: transactionMock,
+      lock: 'UPDATE'
+    }));
+    expect(Contract.update).toHaveBeenCalledWith(expect.any(Object), expect.objectContaining({ transaction: transactionMock }));
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ message: 'Agreement activated' }));
 
     Contract.findByPk.mockResolvedValueOnce(mockContract({ status: 'executed' }));
@@ -419,12 +485,16 @@ describe('agreementController lifecycle', () => {
     Contract.findByPk.mockResolvedValueOnce(activeContract);
 
     await agreementController.completeAgreement({ user: { id: 7 }, params: { id: '10' } }, completeRes);
+    expect(sequelize.transaction).toHaveBeenCalledTimes(1);
     expect(activeContract.status).toBe('completed');
+    expect(activeContract.save).toHaveBeenCalledWith(expect.objectContaining({ transaction: transactionMock }));
 
     const completedContract = mockContract({ status: 'completed' });
     Contract.findByPk.mockResolvedValueOnce(completedContract);
     await agreementController.archiveAgreement({ user: { id: 7 }, params: { id: '10' } }, archiveRes);
+    expect(sequelize.transaction).toHaveBeenCalledTimes(2);
     expect(completedContract.status).toBe('archived');
+    expect(completedContract.save).toHaveBeenCalledWith(expect.objectContaining({ transaction: transactionMock }));
   });
 
   test('downloadAgreement verifies checksum before sending', async () => {
@@ -467,7 +537,9 @@ describe('agreementController lifecycle', () => {
     const contract = mockContract({ status: 'active' });
     Contract.findByPk.mockResolvedValueOnce(contract);
     await agreementController.terminateAgreement({ user: { id: 7 }, params: { id: '10' }, body: { reason: 'Project cancelled' } }, res);
+    expect(sequelize.transaction).toHaveBeenCalledTimes(2);
     expect(contract.status).toBe('terminated');
+    expect(contract.save).toHaveBeenCalledWith(expect.objectContaining({ transaction: transactionMock }));
   });
 
   test('createAmendment clones executed agreement into a draft amendment', async () => {
@@ -497,6 +569,15 @@ describe('agreementController lifecycle', () => {
     const res = createRes();
     await agreementController.createAmendment(req, res);
 
+    expect(sequelize.transaction).toHaveBeenCalledTimes(1);
+    expect(Contract.findByPk).toHaveBeenCalledWith(10, expect.objectContaining({
+      transaction: transactionMock,
+      lock: 'UPDATE'
+    }));
+    expect(Contract.findOne).toHaveBeenCalledWith(expect.objectContaining({
+      transaction: transactionMock,
+      lock: 'UPDATE'
+    }));
     expect(Contract.create).toHaveBeenCalledWith(expect.objectContaining({
       parent_contract_id: 10,
       supersedes_contract_id: 10,
@@ -504,15 +585,37 @@ describe('agreementController lifecycle', () => {
       review_required: true,
       contains_sensitive_data: true,
       retention_period_days: 30
-    }));
+    }), expect.objectContaining({ transaction: transactionMock }));
     expect(res.status).toHaveBeenCalledWith(201);
+  });
+
+  test('createAmendment rejects historical agreement versions', async () => {
+    const original = mockContract({
+      status: 'completed',
+      is_current_version: false,
+      version_number: 1,
+      root_contract_id: 10
+    });
+
+    Contract.findByPk.mockResolvedValueOnce(original);
+
+    const req = { user: { id: 7, role: 'nonprofit' }, params: { id: '10' }, body: { reason: 'Revise legacy version' } };
+    const res = createRes();
+    await agreementController.createAmendment(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(409);
+    expect(Contract.findOne).not.toHaveBeenCalled();
+    expect(Contract.create).not.toHaveBeenCalled();
   });
 
   test('listAgreementReviews and listAgreementHistory return structured workflow data', async () => {
     const contract = mockContract({ root_contract_id: 10 });
     Contract.findByPk.mockResolvedValue(contract);
     ContractReview.findAll.mockResolvedValue([makeReview()]);
-    Contract.findAll.mockResolvedValue([contract, mockContract({ id: 12, root_contract_id: 10, version_number: 2, status: 'draft' })]);
+    Contract.findAndCountAll.mockResolvedValue({
+      count: 2,
+      rows: [contract, mockContract({ id: 12, root_contract_id: 10, version_number: 2, status: 'draft' })]
+    });
 
     const reviewsRes = createRes();
     const historyRes = createRes();
@@ -521,7 +624,12 @@ describe('agreementController lifecycle', () => {
     await agreementController.listAgreementHistory({ user: { id: 7, role: 'nonprofit' }, params: { id: '10' } }, historyRes);
 
     expect(reviewsRes.json).toHaveBeenCalledWith(expect.objectContaining({ reviews: expect.any(Array) }));
-    expect(historyRes.json).toHaveBeenCalledWith(expect.objectContaining({ history: expect.any(Array) }));
+    expect(historyRes.json).toHaveBeenCalledWith(expect.objectContaining({
+      page: 1,
+      limit: 100,
+      total: 2,
+      history: expect.any(Array)
+    }));
   });
 
   test('previewAgreement and adminListAgreements still return expected payloads', async () => {
@@ -599,6 +707,18 @@ describe('agreementController lifecycle', () => {
         active: 1,
         completed: 1
       })
+    }));
+  });
+
+  test('adminAgreementObservability returns transition/anomaly snapshot', async () => {
+    const res = createRes();
+
+    await agreementController.adminAgreementObservability({}, res);
+
+    expect(getAgreementObservabilitySnapshot).toHaveBeenCalledTimes(1);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      transitions: expect.any(Object),
+      recent_anomalies: expect.any(Array)
     }));
   });
 });

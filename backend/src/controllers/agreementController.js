@@ -12,6 +12,21 @@ const {
 const notificationService = require('../services/notificationService');
 const pdfService = require('../services/pdfService');
 const { getStorageAdapter } = require('../services/storage');
+const {
+  createAgreementTransition,
+  submitAgreementForReviewTransition,
+  reviewAgreementTransition,
+  counterpartyReviewAgreementTransition,
+  terminateAgreementTransition,
+  createAmendmentTransition,
+  makeAgreementEffectiveTransition,
+  activateAgreementTransition,
+  completeAgreementTransition,
+  archiveAgreementTransition,
+  signAgreementTransition,
+  updateAgreementDraftTransition
+} = require('../services/agreementWorkflowService');
+const { getAgreementObservabilitySnapshot } = require('../utils/agreementObservability');
 const { AUDIT_ACTIONS, logAudit } = require('../utils/auditLogger');
 
 const DEFAULT_PAGE = 1;
@@ -19,20 +34,39 @@ const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 100;
 const ALLOWED_SOURCE_KINDS = ['template', 'attachment', 'free_text'];
 const DATA_CLASSIFICATIONS = ['public', 'internal', 'confidential', 'restricted'];
-const CONFLICTING_CURRENT_STATUSES = [
-  'draft',
-  'internal_review',
-  'counterparty_review',
-  'changes_requested',
-  'approved_for_signature',
-  'pending_signature',
-  'executed',
-  'effective',
-  'active'
-];
 const DOWNLOADABLE_STATUSES = ['executed', 'effective', 'active', 'completed', 'terminated', 'expired', 'archived'];
-const TERMINABLE_STATUSES = ['executed', 'effective', 'active'];
-const AMENDABLE_STATUSES = ['executed', 'effective', 'active', 'completed'];
+
+function deriveAgreementErrorMetadata(status, message) {
+  if (status === 409) {
+    return { code: 'AGREEMENT_STATE_CONFLICT', category: 'conflict' };
+  }
+  if (status === 403) {
+    return { code: 'AGREEMENT_PERMISSION_DENIED', category: 'permission' };
+  }
+  if (status === 404) {
+    return { code: 'AGREEMENT_NOT_FOUND', category: 'not_found' };
+  }
+  if (status === 400 || status === 422) {
+    const normalized = String(message || '').toLowerCase();
+    const code = normalized.includes('invalid')
+      ? 'AGREEMENT_INVALID_REQUEST'
+      : 'AGREEMENT_VALIDATION_FAILED';
+    return { code, category: 'validation' };
+  }
+  if (status >= 500) {
+    return { code: 'AGREEMENT_INTERNAL_ERROR', category: 'server' };
+  }
+  return { code: 'AGREEMENT_REQUEST_FAILED', category: 'unknown' };
+}
+
+function sendAgreementError(res, status, message, metadata = {}) {
+  const mapped = deriveAgreementErrorMetadata(status, message);
+  return res.status(status).json({
+    error: message,
+    code: metadata.code || mapped.code,
+    category: metadata.category || mapped.category
+  });
+}
 
 function getRequestIp(req) {
   const forwarded = req.headers['x-forwarded-for'];
@@ -120,29 +154,6 @@ function ensureOperationalPrerequisites(contract) {
   return null;
 }
 
-async function createContractReviewRecord({
-  contractId,
-  reviewerId,
-  reviewStage,
-  action,
-  previousStatus,
-  newStatus,
-  feedback,
-  changesRequested
-}) {
-  return ContractReview.create({
-    contract_id: contractId,
-    reviewer_id: reviewerId,
-    review_stage: reviewStage,
-    action,
-    previous_status: previousStatus,
-    new_status: newStatus,
-    feedback: feedback || null,
-    changes_requested: changesRequested || null,
-    reviewed_at: new Date()
-  });
-}
-
 async function notifyAdminsForAgreement(contract, notification) {
   const admins = await User.findAll({
     where: {
@@ -185,17 +196,19 @@ function buildAttachmentPreview(attachment) {
   ].join('\n');
 }
 
-function parsePagination(req) {
-  const page = Math.max(Number.parseInt(req.query.page || DEFAULT_PAGE, 10), 1);
-  const requestedLimit = Number.parseInt(req.query.limit || DEFAULT_LIMIT, 10);
+function parsePagination(req, options = {}) {
+  const query = req.query || {};
+  const defaultLimit = options.defaultLimit || DEFAULT_LIMIT;
+  const page = Math.max(Number.parseInt(query.page || DEFAULT_PAGE, 10), 1);
+  const requestedLimit = Number.parseInt(query.limit || defaultLimit, 10);
   const limit = Math.min(Math.max(requestedLimit, 1), MAX_LIMIT);
   const offset = (page - 1) * limit;
 
   return { page, limit, offset };
 }
 
-async function resolveAcceptedApplication(applicationId) {
-  const application = await Application.findByPk(applicationId);
+async function resolveAcceptedApplication(applicationId, options = {}) {
+  const application = await Application.findByPk(applicationId, options);
 
   if (!application) {
     return { error: { status: 404, message: 'Accepted application not found' } };
@@ -220,13 +233,13 @@ function sanitizeContractResponse(contract) {
   return plain;
 }
 
-async function resolveSourceAttachment(uploadedAttachmentId, projectId) {
+async function resolveSourceAttachment(uploadedAttachmentId, projectId, options = {}) {
   const attachmentId = Number.parseInt(uploadedAttachmentId, 10);
   if (!Number.isInteger(attachmentId)) {
     throw new Error('uploaded_attachment_id must be a valid attachment id');
   }
 
-  const attachment = await Attachment.findByPk(attachmentId);
+  const attachment = await Attachment.findByPk(attachmentId, options);
   if (!attachment || attachment.project_id !== projectId) {
     throw new Error('Uploaded agreement source attachment was not found for this project');
   }
@@ -244,7 +257,8 @@ async function resolveAgreementSource({
   variables,
   freeTextContent,
   uploadedAttachmentId,
-  projectId
+  projectId,
+  transaction
 }) {
   if (sourceKind === 'template') {
     const renderedContent = pdfService.renderTemplatePreview(templateType, variables);
@@ -272,7 +286,7 @@ async function resolveAgreementSource({
     };
   }
 
-  const attachment = await resolveSourceAttachment(uploadedAttachmentId, projectId);
+  const attachment = await resolveSourceAttachment(uploadedAttachmentId, projectId, { transaction });
   const preview = buildAttachmentPreview(attachment);
 
   return {
@@ -353,114 +367,68 @@ async function createAgreement(req, res) {
       return res.status(400).json({ error: 'template_type and title are required' });
     }
 
-    const appResult = await resolveAcceptedApplication(applicationId);
-    if (appResult.error) {
-      return res.status(appResult.error.status).json({ error: appResult.error.message });
-    }
-
-    const { application } = appResult;
-
-    if (application.org_id !== req.user.org_id) {
-      return res.status(403).json({ error: 'You are not authorized to create agreements for this application' });
-    }
-
-    const existingOpenContract = await Contract.findOne({
-      where: {
-        application_id: application.id,
-        template_type: templateType,
-        is_current_version: true,
-        status: {
-          [Op.in]: CONFLICTING_CURRENT_STATUSES
-        }
-      }
-    });
-
-    if (existingOpenContract) {
-      return res.status(409).json({ error: 'A current agreement of this type already exists for this accepted application or invitation' });
-    }
-
-    let sourcePayload;
-    try {
-      sourcePayload = await resolveAgreementSource({
-        sourceKind,
-        templateType,
-        variables,
-        freeTextContent,
-        uploadedAttachmentId,
-        projectId: application.project_id
-      });
-    } catch (error) {
-      return res.status(400).json({ error: error.message });
-    }
-
-    const contract = await Contract.create({
-      application_id: application.id,
-      project_id: application.project_id,
-      nonprofit_user_id: req.user.id,
-      researcher_user_id: application.researcher_id,
-      template_type: templateType,
-      source_kind: sourcePayload.sourceKind,
-      template_version_id: `${templateType}:v1`,
-      uploaded_attachment_id: sourcePayload.uploadedAttachmentId,
+    const result = await createAgreementTransition({
+      applicationId,
+      actorUser: req.user,
+      templateType,
+      sourceKind,
+      variables,
+      freeTextContent,
+      uploadedAttachmentId,
       title,
-      status: 'draft',
-      review_required: reviewRequired,
-      contains_sensitive_data: containsSensitiveData,
-      data_classification: dataClassification,
-      retention_period_days: retentionPeriodDays,
-      destruction_required: destructionRequired,
-      variables: sourcePayload.variables,
-      rendered_content: sourcePayload.renderedContent,
-      content_snapshot: sourcePayload.contentSnapshot,
-      version_number: 1,
-      is_current_version: true
+      reviewRequired,
+      containsSensitiveData,
+      dataClassification,
+      retentionPeriodDays,
+      destructionRequired,
+      resolveAcceptedApplication,
+      resolveAgreementSource
     });
 
-    if (!contract.root_contract_id) {
-      contract.root_contract_id = contract.id;
-      await contract.save();
+    if (result.error) {
+      return sendAgreementError(res, result.error.status, result.error.message);
     }
 
     await logAudit({
       actorId: req.user.id,
       action: AUDIT_ACTIONS.AGREEMENT_CREATED,
       entityType: 'contract',
-      entityId: contract.id,
+      entityId: result.agreement.id,
       metadata: {
-        application_id: application.id,
-        project_id: application.project_id,
-        template_type: templateType,
-        source_kind: sourcePayload.sourceKind,
+        application_id: result.applicationId,
+        project_id: result.projectId,
+        template_type: result.templateType,
+        source_kind: result.agreement.source_kind,
         review_required: reviewRequired,
         contains_sensitive_data: containsSensitiveData
       }
     });
 
     await notificationService.createNotification({
-      userId: application.researcher_id,
+      userId: result.agreement.researcher_user_id,
       type: 'agreement_created',
       title: 'New Agreement Ready for Review',
-      message: `A new ${templateType} agreement has been created for your project collaboration.`,
-      link: `/agreements/${contract.id}`,
+      message: `A new ${result.templateType} agreement has been created for your project collaboration.`,
+      link: `/agreements/${result.agreement.id}`,
       metadata: {
-        agreement_id: contract.id,
-        project_id: application.project_id
+        agreement_id: result.agreement.id,
+        project_id: result.projectId
       }
     });
 
     return res.status(201).json({
       message: 'Agreement created successfully',
-      agreement: sanitizeContractResponse(contract)
+      agreement: result.agreement
     });
   } catch (error) {
     console.error('Create agreement error:', error);
-    return res.status(500).json({ error: 'Failed to create agreement' });
+    return sendAgreementError(res, 500, 'Failed to create agreement');
   }
 }
 
 async function listAgreements(req, res) {
   try {
-    const { page, limit, offset } = parsePagination(req);
+    const { page, limit, offset } = parsePagination(req, { defaultLimit: 100 });
 
     const where = {
       [Op.or]: [
@@ -641,77 +609,45 @@ async function updateAgreement(req, res) {
       return res.status(400).json({ error: 'title cannot be empty' });
     }
 
-    let sourcePayload;
-    try {
-      sourcePayload = await resolveAgreementSource({
-        sourceKind: nextSourceKind,
-        templateType: nextTemplateType,
-        variables: nextVariables,
-        freeTextContent: nextFreeTextContent,
-        uploadedAttachmentId: nextUploadedAttachmentId,
-        projectId: contract.project_id
-      });
-    } catch (error) {
-      return res.status(400).json({ error: error.message });
+    const result = await updateAgreementDraftTransition({
+      agreementId,
+      actorId: req.user.id,
+      nextTemplateType,
+      nextTitle,
+      nextSourceKind,
+      nextVariables,
+      nextFreeTextContent,
+      nextUploadedAttachmentId,
+      nextReviewRequired,
+      nextContainsSensitiveData,
+      nextDataClassification,
+      nextRetentionPeriodDays,
+      nextDestructionRequired,
+      resolveAgreementSource
+    });
+
+    if (result.error) {
+      return sendAgreementError(res, result.error.status, result.error.message);
     }
-
-    const before = {
-      source_kind: contract.source_kind,
-      uploaded_attachment_id: contract.uploaded_attachment_id,
-      template_type: contract.template_type,
-      title: contract.title,
-      variables: contract.variables,
-      review_required: contract.review_required,
-      contains_sensitive_data: contract.contains_sensitive_data,
-      data_classification: contract.data_classification,
-      retention_period_days: contract.retention_period_days,
-      destruction_required: contract.destruction_required
-    };
-
-    contract.source_kind = sourcePayload.sourceKind;
-    contract.uploaded_attachment_id = sourcePayload.uploadedAttachmentId;
-    contract.template_type = nextTemplateType;
-    contract.template_version_id = `${nextTemplateType}:v1`;
-    contract.title = nextTitle;
-    contract.review_required = nextReviewRequired;
-    contract.contains_sensitive_data = nextContainsSensitiveData;
-    contract.data_classification = nextDataClassification;
-    contract.retention_period_days = nextRetentionPeriodDays;
-    contract.destruction_required = nextDestructionRequired;
-    contract.variables = sourcePayload.variables;
-    contract.rendered_content = sourcePayload.renderedContent;
-    contract.content_snapshot = sourcePayload.contentSnapshot;
-    await contract.save();
 
     await logAudit({
       actorId: req.user.id,
       action: AUDIT_ACTIONS.AGREEMENT_UPDATED,
       entityType: 'contract',
-      entityId: contract.id,
+      entityId: result.agreement.id,
       metadata: {
-        before,
-        after: {
-          source_kind: contract.source_kind,
-          uploaded_attachment_id: contract.uploaded_attachment_id,
-          template_type: contract.template_type,
-          title: contract.title,
-          variables: contract.variables,
-          review_required: contract.review_required,
-          contains_sensitive_data: contract.contains_sensitive_data,
-          data_classification: contract.data_classification,
-          retention_period_days: contract.retention_period_days,
-          destruction_required: contract.destruction_required
-        }
+        before: result.before,
+        after: result.after
       }
     });
 
     return res.json({
       message: 'Agreement updated successfully',
-      agreement: sanitizeContractResponse(contract)
+      agreement: result.agreement
     });
   } catch (error) {
     console.error('Update agreement error:', error);
-    return res.status(500).json({ error: 'Failed to update agreement' });
+    return sendAgreementError(res, 500, 'Failed to update agreement');
   }
 }
 
@@ -721,75 +657,56 @@ async function submitAgreementForReview(req, res) {
     if (!Number.isInteger(agreementId)) {
       return res.status(400).json({ error: 'Invalid agreement id' });
     }
-
-    const contract = await Contract.findByPk(agreementId);
-    if (!contract) {
-      return res.status(404).json({ error: 'Agreement not found' });
-    }
-
-    if (contract.nonprofit_user_id !== req.user.id) {
-      return res.status(403).json({ error: 'Only the agreement creator can submit for review' });
-    }
-
-    if (!['draft', 'changes_requested'].includes(contract.status)) {
-      return res.status(400).json({ error: 'Only draft or changes-requested agreements can be submitted for review' });
-    }
-
-    const previousStatus = contract.status;
-    const nextStatus = contract.review_required ? 'internal_review' : 'counterparty_review';
     const feedback = String(req.body.feedback || '').trim();
 
-    contract.status = nextStatus;
-    await contract.save();
-
-    await createContractReviewRecord({
-      contractId: contract.id,
-      reviewerId: req.user.id,
-      reviewStage: 'submission',
-      action: 'submitted',
-      previousStatus,
-      newStatus: nextStatus,
+    const result = await submitAgreementForReviewTransition({
+      agreementId,
+      actorId: req.user.id,
       feedback
     });
+
+    if (result.error) {
+      return sendAgreementError(res, result.error.status, result.error.message);
+    }
 
     await logAudit({
       actorId: req.user.id,
       action: AUDIT_ACTIONS.AGREEMENT_SUBMITTED_FOR_REVIEW,
       entityType: 'contract',
-      entityId: contract.id,
+      entityId: result.agreement.id,
       metadata: {
-        previous_status: previousStatus,
-        new_status: nextStatus
+        previous_status: result.previousStatus,
+        new_status: result.nextStatus
       }
     });
 
-    if (nextStatus === 'internal_review') {
-      await notifyAdminsForAgreement(contract, {
+    if (result.nextStatus === 'internal_review') {
+      await notifyAdminsForAgreement(result.agreement, {
         type: 'agreement_submitted_for_review',
         title: 'Agreement Submitted For Review',
-        message: `${contract.title} is awaiting internal compliance review.`
+        message: `${result.agreement.title} is awaiting internal compliance review.`
       });
     } else {
       await notificationService.createNotification({
-        userId: contract.researcher_user_id,
+        userId: result.agreement.researcher_user_id,
         type: 'agreement_submitted_for_review',
         title: 'Agreement Ready For Your Review',
-        message: `${contract.title} is ready for counterparty review.`,
-        link: `/agreements/${contract.id}`,
+        message: `${result.agreement.title} is ready for counterparty review.`,
+        link: `/agreements/${result.agreement.id}`,
         metadata: {
-          agreement_id: contract.id,
-          project_id: contract.project_id
+          agreement_id: result.agreement.id,
+          project_id: result.agreement.project_id
         }
       });
     }
 
     return res.json({
       message: 'Agreement submitted for review',
-      agreement: sanitizeContractResponse(contract)
+      agreement: result.agreement
     });
   } catch (error) {
     console.error('Submit agreement for review error:', error);
-    return res.status(500).json({ error: 'Failed to submit agreement for review' });
+    return sendAgreementError(res, 500, 'Failed to submit agreement for review');
   }
 }
 
@@ -800,19 +717,6 @@ async function reviewAgreement(req, res) {
       return res.status(400).json({ error: 'Invalid agreement id' });
     }
 
-    const contract = await Contract.findByPk(agreementId);
-    if (!contract) {
-      return res.status(404).json({ error: 'Agreement not found' });
-    }
-
-    if (!isAdminReviewer(req.user)) {
-      return res.status(403).json({ error: 'Admin access required' });
-    }
-
-    if (contract.status !== 'internal_review') {
-      return res.status(400).json({ error: 'Agreement must be in internal_review status' });
-    }
-
     const action = String(req.body.action || '').trim().toLowerCase();
     const feedback = String(req.body.feedback || '').trim();
     const changesRequested = String(req.body.changes_requested || '').trim();
@@ -824,69 +728,65 @@ async function reviewAgreement(req, res) {
       return res.status(400).json({ error: 'changes_requested is required when requesting changes' });
     }
 
-    const previousStatus = contract.status;
-    const nextStatus = action === 'approve' ? 'counterparty_review' : 'changes_requested';
-    contract.status = nextStatus;
-    await contract.save();
-
-    await createContractReviewRecord({
-      contractId: contract.id,
-      reviewerId: req.user.id,
-      reviewStage: 'internal_review',
-      action: action === 'approve' ? 'approved' : 'changes_requested',
-      previousStatus,
-      newStatus: nextStatus,
+    const result = await reviewAgreementTransition({
+      agreementId,
+      actor: req.user,
+      action,
       feedback,
       changesRequested
     });
+
+    if (result.error) {
+      return sendAgreementError(res, result.error.status, result.error.message);
+    }
 
     await logAudit({
       actorId: req.user.id,
       action: action === 'approve' ? AUDIT_ACTIONS.AGREEMENT_REVIEW_APPROVED : AUDIT_ACTIONS.AGREEMENT_CHANGES_REQUESTED,
       entityType: 'contract',
-      entityId: contract.id,
+      entityId: result.agreement.id,
       metadata: {
-        previous_status: previousStatus,
-        new_status: nextStatus,
+        previous_status: result.previousStatus,
+        new_status: result.nextStatus,
         feedback,
         changes_requested: changesRequested || null
       }
     });
 
     await notificationService.createNotification({
-      userId: contract.nonprofit_user_id,
+      userId: result.agreement.nonprofit_user_id,
       type: action === 'approve' ? 'agreement_review_approved' : 'agreement_changes_requested',
       title: action === 'approve' ? 'Agreement Passed Internal Review' : 'Agreement Changes Requested',
       message: action === 'approve'
-        ? `${contract.title} passed internal review and is ready for counterparty review.`
-        : `${contract.title} requires changes before it can move forward.`,
-      link: `/agreements/${contract.id}`,
+        ? `${result.agreement.title} passed internal review and is ready for counterparty review.`
+        : `${result.agreement.title} requires changes before it can move forward.`,
+      link: `/agreements/${result.agreement.id}`,
       metadata: {
-        agreement_id: contract.id,
+        agreement_id: result.agreement.id,
         changes_requested: changesRequested || null
       }
     });
 
     if (action === 'approve') {
       await notificationService.createNotification({
-        userId: contract.researcher_user_id,
+        userId: result.agreement.researcher_user_id,
         type: 'agreement_review_approved',
         title: 'Agreement Ready For Counterparty Review',
-        message: `${contract.title} is ready for your review.`,
-        link: `/agreements/${contract.id}`,
+        message: `${result.agreement.title} is ready for your review.`,
+        link: `/agreements/${result.agreement.id}`,
         metadata: {
-          agreement_id: contract.id
+          agreement_id: result.agreement.id
         }
       });
     }
 
     return res.json({
       message: action === 'approve' ? 'Agreement approved for counterparty review' : 'Agreement changes requested',
-      agreement: sanitizeContractResponse(contract)
+      agreement: result.agreement
     });
   } catch (error) {
     console.error('Review agreement error:', error);
-    return res.status(500).json({ error: 'Failed to review agreement' });
+    return sendAgreementError(res, 500, 'Failed to review agreement');
   }
 }
 
@@ -897,19 +797,6 @@ async function counterpartyReviewAgreement(req, res) {
       return res.status(400).json({ error: 'Invalid agreement id' });
     }
 
-    const contract = await Contract.findByPk(agreementId);
-    if (!contract) {
-      return res.status(404).json({ error: 'Agreement not found' });
-    }
-
-    if (contract.researcher_user_id !== req.user.id) {
-      return res.status(403).json({ error: 'Only the counterparty researcher can review this agreement' });
-    }
-
-    if (contract.status !== 'counterparty_review') {
-      return res.status(400).json({ error: 'Agreement must be in counterparty_review status' });
-    }
-
     const action = String(req.body.action || '').trim().toLowerCase();
     const feedback = String(req.body.feedback || '').trim();
     const changesRequested = String(req.body.changes_requested || '').trim();
@@ -921,56 +808,52 @@ async function counterpartyReviewAgreement(req, res) {
       return res.status(400).json({ error: 'changes_requested is required when requesting changes' });
     }
 
-    const previousStatus = contract.status;
-    const nextStatus = action === 'approve' ? 'approved_for_signature' : 'changes_requested';
-    contract.status = nextStatus;
-    await contract.save();
-
-    await createContractReviewRecord({
-      contractId: contract.id,
-      reviewerId: req.user.id,
-      reviewStage: 'counterparty_review',
-      action: action === 'approve' ? 'counterparty_approved' : 'counterparty_changes_requested',
-      previousStatus,
-      newStatus: nextStatus,
+    const result = await counterpartyReviewAgreementTransition({
+      agreementId,
+      actorId: req.user.id,
+      action,
       feedback,
       changesRequested
     });
+
+    if (result.error) {
+      return sendAgreementError(res, result.error.status, result.error.message);
+    }
 
     await logAudit({
       actorId: req.user.id,
       action: action === 'approve' ? AUDIT_ACTIONS.AGREEMENT_APPROVED_FOR_SIGNATURE : AUDIT_ACTIONS.AGREEMENT_CHANGES_REQUESTED,
       entityType: 'contract',
-      entityId: contract.id,
+      entityId: result.agreement.id,
       metadata: {
-        previous_status: previousStatus,
-        new_status: nextStatus,
+        previous_status: result.previousStatus,
+        new_status: result.nextStatus,
         feedback,
         changes_requested: changesRequested || null
       }
     });
 
     await notificationService.createNotification({
-      userId: contract.nonprofit_user_id,
+      userId: result.agreement.nonprofit_user_id,
       type: action === 'approve' ? 'agreement_approved_for_signature' : 'agreement_changes_requested',
       title: action === 'approve' ? 'Agreement Approved For Signature' : 'Agreement Changes Requested',
       message: action === 'approve'
-        ? `${contract.title} is approved for signature.`
-        : `${contract.title} needs changes before signature.`,
-      link: `/agreements/${contract.id}`,
+        ? `${result.agreement.title} is approved for signature.`
+        : `${result.agreement.title} needs changes before signature.`,
+      link: `/agreements/${result.agreement.id}`,
       metadata: {
-        agreement_id: contract.id,
+        agreement_id: result.agreement.id,
         changes_requested: changesRequested || null
       }
     });
 
     return res.json({
       message: action === 'approve' ? 'Agreement approved for signature' : 'Agreement changes requested',
-      agreement: sanitizeContractResponse(contract)
+      agreement: result.agreement
     });
   } catch (error) {
     console.error('Counterparty review agreement error:', error);
-    return res.status(500).json({ error: 'Failed to review agreement' });
+    return sendAgreementError(res, 500, 'Failed to review agreement');
   }
 }
 
@@ -1016,6 +899,8 @@ async function listAgreementHistory(req, res) {
       return res.status(400).json({ error: 'Invalid agreement id' });
     }
 
+    const { page, limit, offset } = parsePagination(req, { defaultLimit: 100 });
+
     const contract = await Contract.findByPk(agreementId);
     if (!contract) {
       return res.status(404).json({ error: 'Agreement not found' });
@@ -1026,17 +911,24 @@ async function listAgreementHistory(req, res) {
     }
 
     const rootId = contract.root_contract_id || contract.id;
-    const history = await Contract.findAll({
+    const { count, rows } = await Contract.findAndCountAll({
       where: {
         [Op.or]: [
           { id: rootId },
           { root_contract_id: rootId }
         ]
       },
-      order: [['version_number', 'ASC'], ['created_at', 'ASC']]
+      order: [['version_number', 'ASC'], ['created_at', 'ASC']],
+      limit,
+      offset
     });
 
-    return res.json({ history: history.map(sanitizeContractResponse) });
+    return res.json({
+      page,
+      limit,
+      total: count,
+      history: rows.map(sanitizeContractResponse)
+    });
   } catch (error) {
     console.error('List agreement history error:', error);
     return res.status(500).json({ error: 'Failed to list agreement history' });
@@ -1049,61 +941,43 @@ async function signAgreement(req, res) {
     if (!Number.isInteger(agreementId)) {
       return res.status(400).json({ error: 'Invalid agreement id' });
     }
-
-    const contract = await Contract.findByPk(agreementId);
-    if (!contract) {
-      return res.status(404).json({ error: 'Agreement not found' });
-    }
-
-    if (!isAgreementParty(contract, req.user.id)) {
-      return res.status(403).json({ error: 'You are not authorized to sign this agreement' });
-    }
-
-    if (!['approved_for_signature', 'pending_signature'].includes(contract.status)) {
-      return res.status(400).json({ error: 'Agreement must be approved_for_signature before signing' });
-    }
-
-    if (['terminated', 'expired', 'archived', 'completed'].includes(contract.status)) {
-      return res.status(400).json({ error: `Cannot sign a ${contract.status} agreement` });
-    }
-
     const signIp = getRequestIp(req);
-    const now = new Date();
+    const result = await signAgreementTransition({
+      agreementId,
+      actorId: req.user.id,
+      signIp,
+      executeArtifact: async (contract) => {
+        const generated = await buildExecutedAgreementArtifact(contract);
+        const adapter = getStorageAdapter();
+        const storageResult = await adapter.save({
+          projectId: contract.project_id,
+          filename: generated.filename,
+          buffer: generated.buffer,
+          mimetype: generated.mimetype
+        });
 
-    if (contract.nonprofit_user_id === req.user.id) {
-      if (contract.nonprofit_signed_at) {
-        return res.status(409).json({ error: 'You have already signed this agreement' });
+        return {
+          storageKey: storageResult.storageKey,
+          checksum: generated.checksum,
+          filename: generated.filename,
+          mimetype: generated.mimetype
+        };
       }
-      contract.nonprofit_signed_at = now;
-      contract.nonprofit_sign_ip = signIp;
+    });
+
+    if (result.error) {
+      return sendAgreementError(res, result.error.status, result.error.message);
     }
 
-    if (contract.researcher_user_id === req.user.id) {
-      if (contract.researcher_signed_at) {
-        return res.status(409).json({ error: 'You have already signed this agreement' });
-      }
-      contract.researcher_signed_at = now;
-      contract.researcher_sign_ip = signIp;
-    }
-
-    const bothSigned = Boolean(contract.nonprofit_signed_at && contract.researcher_signed_at);
-
-    if (!bothSigned) {
-      contract.status = 'pending_signature';
-      await contract.save();
-
-      const otherPartyId = contract.nonprofit_user_id === req.user.id
-        ? contract.researcher_user_id
-        : contract.nonprofit_user_id;
-
+    if (result.transition === 'pending_signature') {
       await notificationService.createNotification({
-        userId: otherPartyId,
+        userId: result.otherPartyId,
         type: 'agreement_pending_signature',
         title: 'Agreement Needs Your Signature',
-        message: `Agreement ${contract.title} has been signed by the other party and is awaiting your signature.`,
-        link: `/agreements/${contract.id}`,
+        message: `Agreement ${result.agreement.title} has been signed by the other party and is awaiting your signature.`,
+        link: `/agreements/${result.agreement.id}`,
         metadata: {
-          agreement_id: contract.id,
+          agreement_id: result.agreement.id,
           signer_id: req.user.id
         }
       });
@@ -1112,44 +986,28 @@ async function signAgreement(req, res) {
         actorId: req.user.id,
         action: AUDIT_ACTIONS.AGREEMENT_PARTY_SIGNED,
         entityType: 'contract',
-        entityId: contract.id,
+        entityId: result.agreement.id,
         metadata: {
-          status: contract.status
+          status: result.agreement.status
         }
       });
 
       return res.json({
         message: 'Agreement signed. Waiting for counterparty signature.',
-        agreement: sanitizeContractResponse(contract)
+        agreement: result.agreement
       });
     }
 
-    const generated = await buildExecutedAgreementArtifact(contract);
-    const adapter = getStorageAdapter();
-    const storageResult = await adapter.save({
-      projectId: contract.project_id,
-      filename: generated.filename,
-      buffer: generated.buffer,
-      mimetype: generated.mimetype
-    });
-
-    contract.storage_key = storageResult.storageKey;
-    contract.checksum = generated.checksum;
-    contract.executed_filename = generated.filename;
-    contract.executed_mimetype = generated.mimetype;
-    contract.status = 'executed';
-    await contract.save();
-
     await notificationService.createBulkNotifications(
-      [contract.nonprofit_user_id, contract.researcher_user_id],
+      [result.agreement.nonprofit_user_id, result.agreement.researcher_user_id],
       {
         type: 'agreement_executed',
         title: 'Agreement Executed',
-        message: `Agreement ${contract.title} has been fully signed and executed.`,
-        link: `/agreements/${contract.id}`,
+        message: `Agreement ${result.agreement.title} has been fully signed and executed.`,
+        link: `/agreements/${result.agreement.id}`,
         metadata: {
-          agreement_id: contract.id,
-          project_id: contract.project_id
+          agreement_id: result.agreement.id,
+          project_id: result.agreement.project_id
         }
       }
     );
@@ -1158,20 +1016,20 @@ async function signAgreement(req, res) {
       actorId: req.user.id,
       action: AUDIT_ACTIONS.AGREEMENT_EXECUTED,
       entityType: 'contract',
-      entityId: contract.id,
+      entityId: result.agreement.id,
       metadata: {
-        storage_key: contract.storage_key,
-        checksum: contract.checksum
+        storage_key: result.agreement.storage_key,
+        checksum: result.agreement.checksum
       }
     });
 
     return res.json({
       message: 'Agreement fully signed and executed',
-      agreement: sanitizeContractResponse(contract)
+      agreement: result.agreement
     });
   } catch (error) {
     console.error('Sign agreement error:', error);
-    return res.status(500).json({ error: 'Failed to sign agreement' });
+    return sendAgreementError(res, 500, 'Failed to sign agreement');
   }
 }
 
@@ -1218,7 +1076,7 @@ async function downloadAgreement(req, res) {
     const checksum = crypto.createHash('sha256').update(buffer).digest('hex');
 
     if (checksum !== contract.checksum) {
-      return res.status(409).json({ error: 'Agreement checksum verification failed' });
+      return sendAgreementError(res, 409, 'Agreement checksum verification failed');
     }
 
     const safeFilename = contract.executed_filename
@@ -1228,7 +1086,7 @@ async function downloadAgreement(req, res) {
     return res.send(buffer);
   } catch (error) {
     console.error('Download agreement error:', error);
-    return res.status(500).json({ error: 'Failed to download agreement' });
+    return sendAgreementError(res, 500, 'Failed to download agreement');
   }
 }
 
@@ -1239,62 +1097,41 @@ async function makeAgreementEffective(req, res) {
       return res.status(400).json({ error: 'Invalid agreement id' });
     }
 
-    const contract = await Contract.findByPk(agreementId);
-    if (!contract) {
-      return res.status(404).json({ error: 'Agreement not found' });
-    }
-
-    if (contract.nonprofit_user_id !== req.user.id) {
-      return res.status(403).json({ error: 'Only nonprofit owner can mark this agreement effective' });
-    }
-
-    if (contract.status !== 'executed') {
-      return res.status(400).json({ error: 'Only executed agreements can become effective' });
-    }
-
-    const prerequisiteError = ensureOperationalPrerequisites(contract);
-    if (prerequisiteError) {
-      return res.status(400).json({ error: prerequisiteError });
-    }
-
-    contract.status = 'effective';
-    contract.effective_at = new Date();
-    await contract.save();
-
-    await createContractReviewRecord({
-      contractId: contract.id,
-      reviewerId: req.user.id,
-      reviewStage: 'post_execution',
-      action: 'effective',
-      previousStatus: 'executed',
-      newStatus: 'effective'
+    const result = await makeAgreementEffectiveTransition({
+      agreementId,
+      actorId: req.user.id,
+      validateOperationalPrerequisites: ensureOperationalPrerequisites
     });
+
+    if (result.error) {
+      return sendAgreementError(res, result.error.status, result.error.message);
+    }
 
     await logAudit({
       actorId: req.user.id,
       action: AUDIT_ACTIONS.AGREEMENT_EFFECTIVE,
       entityType: 'contract',
-      entityId: contract.id,
+      entityId: result.agreement.id,
       metadata: {
-        effective_at: contract.effective_at
+        effective_at: result.agreement.effective_at
       }
     });
 
     await notificationService.createNotification({
-      userId: contract.researcher_user_id,
+      userId: result.agreement.researcher_user_id,
       type: 'agreement_effective',
       title: 'Agreement Effective',
-      message: `Agreement ${contract.title} is now effective.`,
-      link: `/agreements/${contract.id}`,
+      message: `Agreement ${result.agreement.title} is now effective.`,
+      link: `/agreements/${result.agreement.id}`,
       metadata: {
-        agreement_id: contract.id
+        agreement_id: result.agreement.id
       }
     });
 
-    return res.json({ message: 'Agreement marked effective', agreement: sanitizeContractResponse(contract) });
+    return res.json({ message: 'Agreement marked effective', agreement: result.agreement });
   } catch (error) {
     console.error('Make agreement effective error:', error);
-    return res.status(500).json({ error: 'Failed to mark agreement effective' });
+    return sendAgreementError(res, 500, 'Failed to mark agreement effective');
   }
 }
 
@@ -1305,70 +1142,40 @@ async function activateAgreement(req, res) {
       return res.status(400).json({ error: 'Invalid agreement id' });
     }
 
-    const contract = await Contract.findByPk(agreementId);
-    if (!contract) {
-      return res.status(404).json({ error: 'Agreement not found' });
-    }
-
-    if (contract.nonprofit_user_id !== req.user.id) {
-      return res.status(403).json({ error: 'Only nonprofit owner can activate this agreement' });
-    }
-
-    if (contract.status !== 'effective') {
-      return res.status(400).json({ error: 'Only effective agreements can be activated' });
-    }
-
-    await Contract.update(
-      { is_current_version: false },
-      {
-        where: {
-          application_id: contract.application_id,
-          template_type: contract.template_type,
-          id: {
-            [Op.ne]: contract.id
-          }
-        }
-      }
-    );
-
-    contract.status = 'active';
-    contract.is_current_version = true;
-    await contract.save();
-
-    await createContractReviewRecord({
-      contractId: contract.id,
-      reviewerId: req.user.id,
-      reviewStage: 'post_execution',
-      action: 'activated',
-      previousStatus: 'effective',
-      newStatus: 'active'
+    const result = await activateAgreementTransition({
+      agreementId,
+      actorId: req.user.id
     });
+
+    if (result.error) {
+      return sendAgreementError(res, result.error.status, result.error.message);
+    }
 
     await logAudit({
       actorId: req.user.id,
       action: AUDIT_ACTIONS.AGREEMENT_ACTIVATED,
       entityType: 'contract',
-      entityId: contract.id,
+      entityId: result.agreement.id,
       metadata: {
-        status: contract.status
+        status: result.agreement.status
       }
     });
 
     await notificationService.createNotification({
-      userId: contract.researcher_user_id,
+      userId: result.agreement.researcher_user_id,
       type: 'agreement_activated',
       title: 'Agreement Activated',
-      message: `Agreement ${contract.title} is now active.`,
-      link: `/agreements/${contract.id}`,
+      message: `Agreement ${result.agreement.title} is now active.`,
+      link: `/agreements/${result.agreement.id}`,
       metadata: {
-        agreement_id: contract.id
+        agreement_id: result.agreement.id
       }
     });
 
-    return res.json({ message: 'Agreement activated', agreement: sanitizeContractResponse(contract) });
+    return res.json({ message: 'Agreement activated', agreement: result.agreement });
   } catch (error) {
     console.error('Activate agreement error:', error);
-    return res.status(500).json({ error: 'Failed to activate agreement' });
+    return sendAgreementError(res, 500, 'Failed to activate agreement');
   }
 }
 
@@ -1384,73 +1191,45 @@ async function terminateAgreement(req, res) {
       return res.status(400).json({ error: 'Termination reason is required' });
     }
 
-    const contract = await Contract.findByPk(agreementId);
-    if (!contract) {
-      return res.status(404).json({ error: 'Agreement not found' });
-    }
-
-    if (!isAgreementParty(contract, req.user.id)) {
-      return res.status(403).json({ error: 'You are not authorized to terminate this agreement' });
-    }
-
-    if (contract.status === 'terminated') {
-      return res.status(409).json({ error: 'Agreement is already terminated' });
-    }
-
-    if (!TERMINABLE_STATUSES.includes(contract.status)) {
-      return res.status(400).json({ error: 'Only executed, effective, or active agreements can be terminated' });
-    }
-
-    const previousStatus = contract.status;
-    contract.status = 'terminated';
-    contract.terminated_at = new Date();
-    contract.terminated_by = req.user.id;
-    contract.termination_reason = reason;
-    await contract.save();
-
-    await createContractReviewRecord({
-      contractId: contract.id,
-      reviewerId: req.user.id,
-      reviewStage: 'post_execution',
-      action: 'changes_requested',
-      previousStatus,
-      newStatus: 'terminated',
-      feedback: reason
+    const result = await terminateAgreementTransition({
+      agreementId,
+      actorId: req.user.id,
+      reason
     });
+
+    if (result.error) {
+      return sendAgreementError(res, result.error.status, result.error.message);
+    }
 
     await logAudit({
       actorId: req.user.id,
       action: AUDIT_ACTIONS.AGREEMENT_TERMINATED,
       entityType: 'contract',
-      entityId: contract.id,
+      entityId: result.agreement.id,
       metadata: {
         reason
       }
     });
 
-    const otherPartyId = contract.nonprofit_user_id === req.user.id
-      ? contract.researcher_user_id
-      : contract.nonprofit_user_id;
-
     await notificationService.createNotification({
-      userId: otherPartyId,
+      userId: result.otherPartyId,
       type: 'agreement_terminated',
       title: 'Agreement Terminated',
-      message: `Agreement ${contract.title} has been terminated.`,
-      link: `/agreements/${contract.id}`,
+      message: `Agreement ${result.agreement.title} has been terminated.`,
+      link: `/agreements/${result.agreement.id}`,
       metadata: {
-        agreement_id: contract.id,
+        agreement_id: result.agreement.id,
         terminated_by: req.user.id
       }
     });
 
     return res.json({
       message: 'Agreement terminated',
-      agreement: sanitizeContractResponse(contract)
+      agreement: result.agreement
     });
   } catch (error) {
     console.error('Terminate agreement error:', error);
-    return res.status(500).json({ error: 'Failed to terminate agreement' });
+    return sendAgreementError(res, 500, 'Failed to terminate agreement');
   }
 }
 
@@ -1461,62 +1240,43 @@ async function completeAgreement(req, res) {
       return res.status(400).json({ error: 'Invalid agreement id' });
     }
 
-    const contract = await Contract.findByPk(agreementId);
-    if (!contract) {
-      return res.status(404).json({ error: 'Agreement not found' });
-    }
-
-    if (contract.nonprofit_user_id !== req.user.id) {
-      return res.status(403).json({ error: 'Only nonprofit owner can complete this agreement' });
-    }
-
-    if (!['effective', 'active'].includes(contract.status)) {
-      return res.status(400).json({ error: 'Only effective or active agreements can be completed' });
-    }
-
-    const previousStatus = contract.status;
-    contract.status = 'completed';
-    contract.completed_at = new Date();
-    contract.is_current_version = false;
-    await contract.save();
-
-    await createContractReviewRecord({
-      contractId: contract.id,
-      reviewerId: req.user.id,
-      reviewStage: 'post_execution',
-      action: 'completed',
-      previousStatus,
-      newStatus: 'completed'
+    const result = await completeAgreementTransition({
+      agreementId,
+      actorId: req.user.id
     });
+
+    if (result.error) {
+      return sendAgreementError(res, result.error.status, result.error.message);
+    }
 
     await logAudit({
       actorId: req.user.id,
       action: AUDIT_ACTIONS.AGREEMENT_COMPLETED,
       entityType: 'contract',
-      entityId: contract.id,
+      entityId: result.agreement.id,
       metadata: {
-        completed_at: contract.completed_at
+        completed_at: result.agreement.completed_at
       }
     });
 
     await notificationService.createBulkNotifications(
-      [contract.nonprofit_user_id, contract.researcher_user_id],
+      [result.agreement.nonprofit_user_id, result.agreement.researcher_user_id],
       {
         type: 'agreement_completed',
         title: 'Agreement Completed',
-        message: `Agreement ${contract.title} has been marked completed.`,
-        link: `/agreements/${contract.id}`,
+        message: `Agreement ${result.agreement.title} has been marked completed.`,
+        link: `/agreements/${result.agreement.id}`,
         metadata: {
-          agreement_id: contract.id,
-          project_id: contract.project_id
+          agreement_id: result.agreement.id,
+          project_id: result.agreement.project_id
         }
       }
     );
 
-    return res.json({ message: 'Agreement completed', agreement: sanitizeContractResponse(contract) });
+    return res.json({ message: 'Agreement completed', agreement: result.agreement });
   } catch (error) {
     console.error('Complete agreement error:', error);
-    return res.status(500).json({ error: 'Failed to complete agreement' });
+    return sendAgreementError(res, 500, 'Failed to complete agreement');
   }
 }
 
@@ -1527,63 +1287,43 @@ async function archiveAgreement(req, res) {
       return res.status(400).json({ error: 'Invalid agreement id' });
     }
 
-    const contract = await Contract.findByPk(agreementId);
-    if (!contract) {
-      return res.status(404).json({ error: 'Agreement not found' });
-    }
-
-    const isOwner = contract.nonprofit_user_id === req.user.id;
-    if (!isOwner && !isAdminReviewer(req.user)) {
-      return res.status(403).json({ error: 'Only the nonprofit owner or an admin can archive this agreement' });
-    }
-
-    if (!['completed', 'terminated', 'expired'].includes(contract.status)) {
-      return res.status(400).json({ error: 'Only completed, terminated, or expired agreements can be archived' });
-    }
-
-    const previousStatus = contract.status;
-    contract.status = 'archived';
-    contract.archived_at = new Date();
-    contract.is_current_version = false;
-    await contract.save();
-
-    await createContractReviewRecord({
-      contractId: contract.id,
-      reviewerId: req.user.id,
-      reviewStage: 'post_execution',
-      action: 'archived',
-      previousStatus,
-      newStatus: 'archived'
+    const result = await archiveAgreementTransition({
+      agreementId,
+      actor: req.user
     });
+
+    if (result.error) {
+      return sendAgreementError(res, result.error.status, result.error.message);
+    }
 
     await logAudit({
       actorId: req.user.id,
       action: AUDIT_ACTIONS.AGREEMENT_ARCHIVED,
       entityType: 'contract',
-      entityId: contract.id,
+      entityId: result.agreement.id,
       metadata: {
-        archived_at: contract.archived_at
+        archived_at: result.agreement.archived_at
       }
     });
 
     await notificationService.createBulkNotifications(
-      [contract.nonprofit_user_id, contract.researcher_user_id],
+      [result.agreement.nonprofit_user_id, result.agreement.researcher_user_id],
       {
         type: 'agreement_archived',
         title: 'Agreement Archived',
-        message: `Agreement ${contract.title} has been archived.`,
-        link: `/agreements/${contract.id}`,
+        message: `Agreement ${result.agreement.title} has been archived.`,
+        link: `/agreements/${result.agreement.id}`,
         metadata: {
-          agreement_id: contract.id,
-          project_id: contract.project_id
+          agreement_id: result.agreement.id,
+          project_id: result.agreement.project_id
         }
       }
     );
 
-    return res.json({ message: 'Agreement archived', agreement: sanitizeContractResponse(contract) });
+    return res.json({ message: 'Agreement archived', agreement: result.agreement });
   } catch (error) {
     console.error('Archive agreement error:', error);
-    return res.status(500).json({ error: 'Failed to archive agreement' });
+    return sendAgreementError(res, 500, 'Failed to archive agreement');
   }
 }
 
@@ -1593,103 +1333,51 @@ async function createAmendment(req, res) {
     if (!Number.isInteger(agreementId)) {
       return res.status(400).json({ error: 'Invalid agreement id' });
     }
-
-    const contract = await Contract.findByPk(agreementId);
-    if (!contract) {
-      return res.status(404).json({ error: 'Agreement not found' });
-    }
-
-    if (!isAgreementParty(contract, req.user.id)) {
-      return res.status(403).json({ error: 'You are not authorized to amend this agreement' });
-    }
-
-    if (!AMENDABLE_STATUSES.includes(contract.status)) {
-      return res.status(400).json({ error: 'Only executed, effective, active, or completed agreements can be amended' });
-    }
-
-    const existingAmendment = await Contract.findOne({
-      where: {
-        supersedes_contract_id: contract.id,
-        status: {
-          [Op.in]: CONFLICTING_CURRENT_STATUSES
-        }
-      }
-    });
-
-    if (existingAmendment) {
-      return res.status(409).json({ error: 'An amendment is already in progress for this agreement' });
-    }
-
     const reason = String(req.body.reason || '').trim();
 
-    const amendment = await Contract.create({
-      application_id: contract.application_id,
-      project_id: contract.project_id,
-      nonprofit_user_id: contract.nonprofit_user_id,
-      researcher_user_id: contract.researcher_user_id,
-      template_type: contract.template_type,
-      template_version_id: contract.template_version_id,
-      source_kind: contract.source_kind,
-      uploaded_attachment_id: contract.uploaded_attachment_id,
-      title: `${contract.title} Amendment v${(contract.version_number || 1) + 1}`,
-      status: 'draft',
-      review_required: contract.review_required,
-      contains_sensitive_data: contract.contains_sensitive_data,
-      data_classification: contract.data_classification,
-      retention_period_days: contract.retention_period_days,
-      destruction_required: contract.destruction_required,
-      variables: contract.variables || {},
-      rendered_content: contract.rendered_content,
-      content_snapshot: contract.content_snapshot,
-      parent_contract_id: contract.id,
-      root_contract_id: contract.root_contract_id || contract.id,
-      supersedes_contract_id: contract.id,
-      version_number: (contract.version_number || 1) + 1,
-      is_current_version: false,
-      metadata: {
-        ...(contract.metadata || {}),
-        amendment_reason: reason || null,
-        amendment_initiated_by: req.user.id
-      }
+    const result = await createAmendmentTransition({
+      agreementId,
+      actorId: req.user.id,
+      reason
     });
+
+    if (result.error) {
+      return sendAgreementError(res, result.error.status, result.error.message);
+    }
 
     await logAudit({
       actorId: req.user.id,
       action: AUDIT_ACTIONS.AGREEMENT_CREATED,
       entityType: 'contract',
-      entityId: amendment.id,
+      entityId: result.agreement.id,
       metadata: {
-        amendment_of: contract.id,
-        root_contract_id: amendment.root_contract_id,
-        version_number: amendment.version_number,
+        amendment_of: result.supersededAgreementId,
+        root_contract_id: result.agreement.root_contract_id,
+        version_number: result.agreement.version_number,
         reason: reason || null
       }
     });
 
-    const otherPartyId = contract.nonprofit_user_id === req.user.id
-      ? contract.researcher_user_id
-      : contract.nonprofit_user_id;
-
     await notificationService.createNotification({
-      userId: otherPartyId,
+      userId: result.otherPartyId,
       type: 'agreement_amendment_created',
       title: 'Agreement Amendment Drafted',
-      message: `An amendment draft has been created for ${contract.title}.`,
-      link: `/agreements/${amendment.id}`,
+      message: `An amendment draft has been created for ${result.agreement.title}.`,
+      link: `/agreements/${result.agreement.id}`,
       metadata: {
-        agreement_id: amendment.id,
-        supersedes_contract_id: contract.id,
-        project_id: contract.project_id
+        agreement_id: result.agreement.id,
+        supersedes_contract_id: result.supersededAgreementId,
+        project_id: result.agreement.project_id
       }
     });
 
     return res.status(201).json({
       message: 'Agreement amendment created',
-      agreement: sanitizeContractResponse(amendment)
+      agreement: result.agreement
     });
   } catch (error) {
     console.error('Create amendment error:', error);
-    return res.status(500).json({ error: 'Failed to create agreement amendment' });
+    return sendAgreementError(res, 500, 'Failed to create agreement amendment');
   }
 }
 
@@ -1823,6 +1511,15 @@ async function adminAgreementStats(req, res) {
   }
 }
 
+async function adminAgreementObservability(req, res) {
+  try {
+    return res.json(getAgreementObservabilitySnapshot());
+  } catch (error) {
+    console.error('Admin agreement observability error:', error);
+    return res.status(500).json({ error: 'Failed to fetch agreement observability snapshot' });
+  }
+}
+
 module.exports = {
   createAgreement,
   listAgreements,
@@ -1844,5 +1541,6 @@ module.exports = {
   getTemplates,
   previewAgreement,
   adminListAgreements,
-  adminAgreementStats
+  adminAgreementStats,
+  adminAgreementObservability
 };

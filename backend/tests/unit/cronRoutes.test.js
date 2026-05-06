@@ -11,12 +11,17 @@ jest.mock('../../src/tasks/matchGenerationJob', () => ({
   generateMatches: jest.fn(),
 }));
 
+jest.mock('../../src/tasks/agreementLifecycleMaintenance', () => ({
+  runAgreementLifecycleMaintenance: jest.fn(),
+}));
+
 const express = require('express');
 const request = require('supertest');
 const cronRoutes = require('../../src/routes/cronRoutes');
 const notificationCleanup = require('../../src/tasks/notificationCleanup');
 const milestoneDeadlineChecker = require('../../src/tasks/milestoneDeadlineChecker');
 const matchGenerationJob = require('../../src/tasks/matchGenerationJob');
+const agreementLifecycleMaintenance = require('../../src/tasks/agreementLifecycleMaintenance');
 
 const app = express();
 app.use(express.json());
@@ -108,6 +113,54 @@ describe('cronRoutes', () => {
           matchesUpdated: 3,
           notificationsSent: 1,
         },
+      })
+    );
+  });
+
+  it('runs agreement lifecycle maintenance when authorized', async () => {
+    agreementLifecycleMaintenance.runAgreementLifecycleMaintenance.mockResolvedValue({
+      expire: { scanned: 3, expired: 2, failed: 0, dryRun: false },
+      anomalies: { duplicateCurrentVersionPairs: 0, stalePendingSignatures: 1, executedMissingArtifacts: 0 }
+    });
+
+    const response = await request(app)
+      .get('/api/cron/agreement-lifecycle')
+      .set('Authorization', 'Bearer test-cron-secret')
+      .expect(200);
+
+    expect(agreementLifecycleMaintenance.runAgreementLifecycleMaintenance).toHaveBeenCalledWith({ dryRun: false });
+    expect(response.body).toEqual(
+      expect.objectContaining({
+        ok: true,
+        job: 'agreement-lifecycle-maintenance',
+        result: expect.objectContaining({
+          expire: expect.objectContaining({ expired: 2 }),
+          anomalies: expect.objectContaining({ stalePendingSignatures: 1 })
+        })
+      })
+    );
+  });
+
+  it('passes dryRun=true to agreement lifecycle maintenance', async () => {
+    agreementLifecycleMaintenance.runAgreementLifecycleMaintenance.mockResolvedValue({
+      expire: { scanned: 5, expired: 0, failed: 0, dryRun: true },
+      anomalies: { duplicateCurrentVersionPairs: 1, stalePendingSignatures: 0, executedMissingArtifacts: 0 }
+    });
+
+    const response = await request(app)
+      .get('/api/cron/agreement-lifecycle?dryRun=true')
+      .set('Authorization', 'Bearer test-cron-secret')
+      .expect(200);
+
+    expect(agreementLifecycleMaintenance.runAgreementLifecycleMaintenance).toHaveBeenCalledWith({ dryRun: true });
+    expect(response.body).toEqual(
+      expect.objectContaining({
+        ok: true,
+        job: 'agreement-lifecycle-maintenance',
+        result: expect.objectContaining({
+          expire: expect.objectContaining({ dryRun: true, expired: 0 }),
+          anomalies: expect.objectContaining({ duplicateCurrentVersionPairs: 1 })
+        })
       })
     );
   });
