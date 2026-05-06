@@ -147,10 +147,12 @@ if (process.env.VERCEL !== '1') {
           const milestoneDeadlineChecker = require('./tasks/milestoneDeadlineChecker');
           const matchGenerationJob = require('./tasks/matchGenerationJob');
           const attachmentRetentionCleanup = require('./tasks/attachmentRetentionCleanup');
+          const agreementLifecycleMaintenance = require('./tasks/agreementLifecycleMaintenance');
           notificationCleanup.scheduleCleanup();
           milestoneDeadlineChecker.scheduleDeadlineChecks();
           matchGenerationJob.scheduleMatchGeneration();
           attachmentRetentionCleanup.scheduleAttachmentRetentionCleanup();
+          agreementLifecycleMaintenance.scheduleAgreementLifecycleMaintenance();
         } catch (cleanupError) {
           console.warn('⚠ Failed to schedule background jobs:', cleanupError.message);
           // Don't fail server startup if scheduling fails

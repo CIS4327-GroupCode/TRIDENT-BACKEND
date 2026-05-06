@@ -1,6 +1,7 @@
 const notificationCleanup = require('../tasks/notificationCleanup');
 const milestoneDeadlineChecker = require('../tasks/milestoneDeadlineChecker');
 const matchGenerationJob = require('../tasks/matchGenerationJob');
+const agreementLifecycleMaintenance = require('../tasks/agreementLifecycleMaintenance');
 
 const buildJobResponse = (job, result) => ({
   ok: true,
@@ -56,6 +57,21 @@ exports.runMatchGeneration = async (req, res) => {
       ok: false,
       job: 'match-generation',
       error: error.message || 'Match generation failed',
+    });
+  }
+};
+
+exports.runAgreementLifecycleMaintenance = async (req, res) => {
+  try {
+    const dryRun = String(req.query.dryRun || '').trim().toLowerCase() === 'true';
+    const result = await agreementLifecycleMaintenance.runAgreementLifecycleMaintenance({ dryRun });
+    return res.json(buildJobResponse('agreement-lifecycle-maintenance', result));
+  } catch (error) {
+    console.error('[cron] agreement lifecycle maintenance failed:', error);
+    return res.status(500).json({
+      ok: false,
+      job: 'agreement-lifecycle-maintenance',
+      error: error.message || 'Agreement lifecycle maintenance failed'
     });
   }
 };

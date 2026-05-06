@@ -9,5 +9,6 @@ router.use(validateCronRequest);
 router.get('/notification-cleanup', cronController.runNotificationCleanup);
 router.get('/milestone-deadlines', cronController.runMilestoneDeadlineChecks);
 router.get('/match-generation', cronController.runMatchGeneration);
+router.get('/agreement-lifecycle', cronController.runAgreementLifecycleMaintenance);
 
 module.exports = router;

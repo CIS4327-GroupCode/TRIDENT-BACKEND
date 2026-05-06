@@ -57,6 +57,7 @@ router.put('/ratings/:ratingId/moderate', ratingController.moderateRating);
 // Agreement Governance (UC11)
 router.get('/agreements', agreementController.adminListAgreements);
 router.get('/agreements/stats', agreementController.adminAgreementStats);
+router.get('/agreements/observability', agreementController.adminAgreementObservability);
 
 // SLA Alerts (UC12)
 router.get('/alerts', adminController.getAdminAlerts);
