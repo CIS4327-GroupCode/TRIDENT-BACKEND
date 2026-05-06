@@ -40,9 +40,14 @@ jest.mock('bcryptjs', () => ({
   hash: jest.fn()
 }));
 
+jest.mock('../../src/services/notificationService', () => ({
+  createNotification: jest.fn(),
+}));
+
 const bcrypt = require('bcryptjs');
 const adminController = require('../../src/controllers/adminController');
 const { User, Organization, ResearcherProfile, Project, Milestone, sequelize } = require('../../src/database/models');
+const notificationService = require('../../src/services/notificationService');
 
 describe('Admin Controller', () => {
   let req, res;
@@ -253,6 +258,17 @@ describe('Admin Controller', () => {
       await adminController.updateUserStatus(req, res);
 
       expect(mockUser.save).toHaveBeenCalled();
+      expect(notificationService.createNotification).toHaveBeenCalledWith({
+        userId: 1,
+        type: 'account_status_changed',
+        title: 'Account Status Updated',
+        message: 'Your account status changed from pending to active.',
+        link: '/settings',
+        metadata: {
+          previous_status: 'pending',
+          new_status: 'active',
+        },
+      });
       expect(res.status).toHaveBeenCalledWith(200);
       expect(res.json).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -279,6 +295,42 @@ describe('Admin Controller', () => {
       await adminController.updateUserStatus(req, res);
 
       expect(res.status).toHaveBeenCalledWith(404);
+    });
+
+    it('should restore a suspended user and notify them', async () => {
+      req.params.id = 2;
+
+      const mockUser = {
+        id: 2,
+        name: 'Suspended User',
+        email: 'suspended@example.com',
+        role: 'researcher',
+        deleted_at: new Date(),
+        restore: jest.fn().mockResolvedValue(true),
+      };
+
+      User.findByPk.mockResolvedValue(mockUser);
+
+      await adminController.unsuspendUser(req, res);
+
+      expect(mockUser.restore).toHaveBeenCalled();
+      expect(notificationService.createNotification).toHaveBeenCalledWith({
+        userId: 2,
+        type: 'account_status_changed',
+        title: 'Account Restored',
+        message: 'Your account has been restored and is active again.',
+        link: '/settings',
+        metadata: {
+          previous_status: 'suspended',
+          new_status: 'active',
+        },
+      });
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: 'User account unsuspended successfully',
+        })
+      );
     });
   });
 

@@ -7,6 +7,7 @@ const db = require('./db');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const sequelize = require('./database');
+const { shouldRunProcessSchedulers } = require('./utils/schedulerRuntime');
 
 const app = express();
 
@@ -57,6 +58,7 @@ const adminRoutes = require('./routes/adminRoutes');
 const projectRoutes = require('./routes/projectRoutes');
 const messageRoutes = require('./routes/messagesRoutes');
 const notificationRoutes = require('./routes/notificationRoutes');
+const cronRoutes = require('./routes/cronRoutes');
 const applicationRoutes = require('./routes/applicationRoutes');
 const matchRoutes = require('./routes/matchRoutes');
 const agreementRoutes = require('./routes/agreementRoutes');
@@ -76,6 +78,7 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/projects', projectRoutes);
 app.use('/api/messages', messageRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/cron', cronRoutes);
 app.use('/api/applications', applicationRoutes);
 app.use('/api/matches', matchRoutes);
 app.use('/api/agreements', agreementRoutes);
@@ -137,19 +140,23 @@ if (process.env.VERCEL !== '1') {
         console.log('✓ Database synchronized');
       }
 
-      // Schedule notification cleanup task
-      try {
-        const notificationCleanup = require('./tasks/notificationCleanup');
-        const milestoneDeadlineChecker = require('./tasks/milestoneDeadlineChecker');
-        const matchGenerationJob = require('./tasks/matchGenerationJob');
-        const attachmentRetentionCleanup = require('./tasks/attachmentRetentionCleanup');
-        notificationCleanup.scheduleCleanup();
-        milestoneDeadlineChecker.scheduleDeadlineChecks();
-        matchGenerationJob.scheduleMatchGeneration();
-        attachmentRetentionCleanup.scheduleAttachmentRetentionCleanup();
-      } catch (cleanupError) {
-        console.warn('⚠ Failed to schedule notification cleanup:', cleanupError.message);
-        // Don't fail server startup if scheduling fails
+      if (shouldRunProcessSchedulers()) {
+        // Schedule background jobs only when this process owns scheduler execution.
+        try {
+          const notificationCleanup = require('./tasks/notificationCleanup');
+          const milestoneDeadlineChecker = require('./tasks/milestoneDeadlineChecker');
+          const matchGenerationJob = require('./tasks/matchGenerationJob');
+          const attachmentRetentionCleanup = require('./tasks/attachmentRetentionCleanup');
+          notificationCleanup.scheduleCleanup();
+          milestoneDeadlineChecker.scheduleDeadlineChecks();
+          matchGenerationJob.scheduleMatchGeneration();
+          attachmentRetentionCleanup.scheduleAttachmentRetentionCleanup();
+        } catch (cleanupError) {
+          console.warn('⚠ Failed to schedule background jobs:', cleanupError.message);
+          // Don't fail server startup if scheduling fails
+        }
+      } else {
+        console.log('ℹ Process schedulers disabled for this runtime; use cron routes or a dedicated worker.');
       }
       
       app.listen(PORT, () => {

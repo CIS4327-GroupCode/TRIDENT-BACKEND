@@ -41,6 +41,10 @@ jest.mock('../../src/services/emailService', () => ({
   sendTwoFactorCodeEmail: jest.fn()
 }));
 
+jest.mock('../../src/services/notificationService', () => ({
+  createNotification: jest.fn(),
+}));
+
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const authController = require('../../src/controllers/authController');
@@ -48,6 +52,7 @@ const authModel = require('../../src/models/authModel');
 const { EmailVerification, PasswordReset, User } = require('../../src/database/models');
 const TwoFactorCode = require('../../src/database/models/TwoFactorCode');
 const emailService = require('../../src/services/emailService');
+const notificationService = require('../../src/services/notificationService');
 
 describe('Authentication Controller', () => {
   let req;
@@ -253,13 +258,30 @@ describe('Authentication Controller', () => {
 
     it('verifies email successfully when token is valid', async () => {
       req.query = { token: 'verify-token' };
-      jwt.verify.mockReturnValue({ purpose: 'email-verification' });
+      jwt.verify.mockReturnValue({ purpose: 'email-verification', userId: 1 });
       const destroy = jest.fn().mockResolvedValue(undefined);
       EmailVerification.findByToken.mockResolvedValue({ isExpired: () => false, destroy });
+      const userSave = jest.fn().mockResolvedValue(undefined);
+      User.findByPk.mockResolvedValue({
+        id: 1,
+        email: 'john@example.com',
+        account_status: 'pending',
+        save: userSave,
+      });
+      notificationService.createNotification.mockResolvedValue({ id: 55 });
 
       await authController.verifyEmail(req, res);
 
+      expect(userSave).toHaveBeenCalled();
       expect(destroy).toHaveBeenCalled();
+      expect(notificationService.createNotification).toHaveBeenCalledWith({
+        userId: 1,
+        type: 'account_verified',
+        title: 'Account Verified',
+        message: 'Your email address has been verified successfully.',
+        link: '/settings',
+        metadata: { email: 'john@example.com' },
+      });
       expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
     });
   });

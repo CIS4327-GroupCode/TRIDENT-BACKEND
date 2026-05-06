@@ -1686,8 +1686,6 @@ async function seedDatabase() {
         'account_status_changed',
         'account_verified',
         'user_suspended',
-        'security',
-        'admin_message',
         'system_announcement'
       ];
 

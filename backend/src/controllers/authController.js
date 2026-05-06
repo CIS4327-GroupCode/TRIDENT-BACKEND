@@ -5,6 +5,7 @@ const jwt = require("jsonwebtoken");
 const { EmailVerification, PasswordReset, User } = require('../database/models');
 const TwoFactorCode = require('../database/models/TwoFactorCode');
 const emailService = require('../services/emailService');
+const notificationService = require('../services/notificationService');
 const { PASSWORD_POLICY_MESSAGE, isStrongPassword } = require('../utils/passwordPolicy');
 
 
@@ -297,6 +298,17 @@ exports.verifyEmail = async (req, res) => {
 
     // Delete verification record after successful verification/update.
     await verification.destroy();
+
+    await notificationService.createNotification({
+      userId: user.id,
+      type: 'account_verified',
+      title: 'Account Verified',
+      message: 'Your email address has been verified successfully.',
+      link: '/settings',
+      metadata: {
+        email: user.email,
+      },
+    });
 
     res.json({ 
       success: true,

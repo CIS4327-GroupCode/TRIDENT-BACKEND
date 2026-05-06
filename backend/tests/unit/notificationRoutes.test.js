@@ -106,6 +106,36 @@ describe('Notification Routes', () => {
       expect(res.status).toBe(200);
       expect(res.body.limit).toBe(100);
     });
+
+    it('should exclude archived notifications from the active inbox and unread counts', async () => {
+      const baselineUnread = await request(app)
+        .get('/api/notifications/unread-count')
+        .set('Authorization', `Bearer ${authToken}`);
+
+      const archivedNotification = await Notification.create({
+        user_id: testUser.id,
+        type: 'system_announcement',
+        title: 'Archived Notification',
+        message: 'This notification should stay out of the active inbox',
+        is_read: false,
+        archived: true,
+      });
+
+      const listRes = await request(app)
+        .get('/api/notifications')
+        .set('Authorization', `Bearer ${authToken}`);
+
+      const unreadRes = await request(app)
+        .get('/api/notifications/unread-count')
+        .set('Authorization', `Bearer ${authToken}`);
+
+      expect(listRes.status).toBe(200);
+      expect(listRes.body.notifications.some((n) => n.id === archivedNotification.id)).toBe(false);
+      expect(unreadRes.status).toBe(200);
+      expect(unreadRes.body.unreadCount).toBe(baselineUnread.body.unreadCount);
+
+      await archivedNotification.destroy();
+    });
   });
 
   describe('GET /api/notifications/unread-count', () => {

@@ -79,6 +79,7 @@ Notification.init(
           'account_status_changed',
           'admin_message',
           // Collaboration events
+          'project_application',
           'application_received',
           'application_accepted',
           'application_rejected',
