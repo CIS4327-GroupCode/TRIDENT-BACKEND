@@ -1,8 +1,20 @@
 const multer = require('multer');
 const { Op } = require('sequelize');
-const { Attachment, Project, Application, Match, User, sequelize } = require('../database/models');
+const {
+  Attachment,
+  Project,
+  Application,
+  Match,
+  User,
+  Milestone,
+  sequelize
+} = require('../database/models');
 const { getStorageAdapter } = require('../services/storage');
 const { scanAttachment } = require('../services/scanService');
+const {
+  canResearcherAccessMilestone,
+  getResearcherMilestoneAccess
+} = require('../services/milestoneAccessService');
 
 const DEFAULT_ALLOWED_MIME_TYPES = [
   'application/pdf',
@@ -25,12 +37,18 @@ const allowedMimeTypes = (process.env.ATTACHMENT_ALLOWED_MIME_TYPES || DEFAULT_A
   .map((item) => item.trim())
   .filter(Boolean);
 
-async function getNextVersion(projectId, filename) {
+async function getNextVersion(projectId, filename, milestoneId = null, useMilestoneScope = false) {
+  const where = {
+    project_id: projectId,
+    filename
+  };
+
+  if (useMilestoneScope) {
+    where.milestone_id = milestoneId;
+  }
+
   const latest = await Attachment.findOne({
-    where: {
-      project_id: projectId,
-      filename
-    },
+    where,
     order: [['version', 'DESC']]
   });
 
@@ -49,13 +67,15 @@ async function getAttachmentFeatureSupport() {
     attachmentFeatureCache = {
       versioning: Boolean(table.version && table.is_latest),
       scanColumns: Boolean(table.scan_status && table.scanned_at && table.quarantine_reason),
-      retention: Boolean(table.retention_expires_at)
+      retention: Boolean(table.retention_expires_at),
+      milestoneScope: Boolean(table.milestone_id)
     };
   } catch (error) {
     attachmentFeatureCache = {
       versioning: false,
       scanColumns: false,
-      retention: false
+      retention: false,
+      milestoneScope: false
     };
   }
 
@@ -130,7 +150,43 @@ async function canResearcherAccessProject(user, projectId) {
   return Boolean(application || match);
 }
 
-async function getAuthorizedProjectForRead(req, res) {
+async function getMilestoneForProject(projectId, milestoneId) {
+  return Milestone.findOne({
+    where: {
+      id: milestoneId,
+      project_id: projectId
+    }
+  });
+}
+
+async function getAssignedMilestoneIdsForResearcher(userId, projectId) {
+  try {
+    const access = await getResearcherMilestoneAccess({
+      researcherId: userId,
+      projectId
+    });
+    return access.milestoneIds;
+  } catch (error) {
+    console.warn('Assigned milestone lookup failed:', error.message);
+    return [];
+  }
+}
+
+function parseOptionalMilestoneId(rawValue) {
+  if (rawValue === undefined || rawValue === null || rawValue === '') {
+    return { milestoneId: null };
+  }
+
+  const parsed = Number.parseInt(rawValue, 10);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    return { error: 'milestone_id must be a valid positive integer' };
+  }
+
+  return { milestoneId: parsed };
+}
+
+async function getAuthorizedProjectForRead(req, res, options = {}) {
+  const { milestoneId = null, featureSupport = null } = options;
   const projectId = Number.parseInt(req.params.projectId, 10);
   if (!Number.isInteger(projectId)) {
     res.status(400).json({ error: 'Invalid project id' });
@@ -145,6 +201,29 @@ async function getAuthorizedProjectForRead(req, res) {
 
   const nonprofitAccess = await canNonprofitAccessProject(req.user, project);
   const researcherAccess = await canResearcherAccessProject(req.user, projectId);
+  if (req.user.role === 'researcher' && milestoneId !== null) {
+    if (!featureSupport?.milestoneScope) {
+      res.status(400).json({ error: 'Milestone-scoped attachments are not enabled yet' });
+      return null;
+    }
+
+    const milestone = await getMilestoneForProject(projectId, milestoneId);
+    if (!milestone) {
+      res.status(404).json({ error: 'Milestone not found' });
+      return null;
+    }
+
+    const researcherMilestoneAccess = await canResearcherAccessMilestone({
+      researcherId: req.user.id,
+      projectId,
+      milestoneId
+    });
+    if (!researcherMilestoneAccess) {
+      res.status(403).json({ error: 'Unauthorized for milestone access' });
+      return null;
+    }
+  }
+
   if (!nonprofitAccess && !researcherAccess) {
     res.status(403).json({ error: 'Unauthorized' });
     return null;
@@ -153,7 +232,8 @@ async function getAuthorizedProjectForRead(req, res) {
   return project;
 }
 
-async function getAuthorizedProjectForWrite(req, res) {
+async function getAuthorizedProjectForWrite(req, res, options = {}) {
+  const { milestoneId = null, featureSupport = null } = options;
   const projectId = Number.parseInt(req.params.projectId, 10);
   if (!Number.isInteger(projectId)) {
     res.status(400).json({ error: 'Invalid project id' });
@@ -167,17 +247,70 @@ async function getAuthorizedProjectForWrite(req, res) {
   }
 
   const nonprofitAccess = await canNonprofitAccessProject(req.user, project);
-  if (!nonprofitAccess) {
-    res.status(403).json({ error: 'Unauthorized' });
-    return null;
+  if (nonprofitAccess) {
+    if (milestoneId !== null) {
+      if (!featureSupport?.milestoneScope) {
+        res.status(400).json({ error: 'Milestone-scoped attachments are not enabled yet' });
+        return null;
+      }
+
+      const milestone = await getMilestoneForProject(projectId, milestoneId);
+      if (!milestone) {
+        res.status(404).json({ error: 'Milestone not found' });
+        return null;
+      }
+    }
+
+    return project;
   }
 
-  return project;
+  if (req.user?.role === 'researcher') {
+    if (milestoneId === null) {
+      res.status(403).json({ error: 'Researchers can only upload files to assigned milestones' });
+      return null;
+    }
+
+    if (!featureSupport?.milestoneScope) {
+      res.status(400).json({ error: 'Milestone-scoped attachments are not enabled yet' });
+      return null;
+    }
+
+    const milestone = await getMilestoneForProject(projectId, milestoneId);
+    if (!milestone) {
+      res.status(404).json({ error: 'Milestone not found' });
+      return null;
+    }
+
+    const researcherMilestoneAccess = await canResearcherAccessMilestone({
+      researcherId: req.user.id,
+      projectId,
+      milestoneId
+    });
+    if (!researcherMilestoneAccess) {
+      res.status(403).json({ error: 'Unauthorized for milestone uploads' });
+      return null;
+    }
+
+    return project;
+  }
+
+  res.status(403).json({ error: 'Unauthorized' });
+  return null;
 }
 
 const uploadAttachment = async (req, res) => {
   try {
-    const project = await getAuthorizedProjectForWrite(req, res);
+    const storageAdapter = getStorageAdapter();
+    const featureSupport = await getAttachmentFeatureSupport();
+    const milestoneScopeInput = req.body?.milestone_id ?? req.query?.milestone_id;
+    const milestoneParsing = parseOptionalMilestoneId(milestoneScopeInput);
+    if (milestoneParsing.error) {
+      return res.status(400).json({ error: milestoneParsing.error });
+    }
+
+    const milestoneId = milestoneParsing.milestoneId;
+
+    const project = await getAuthorizedProjectForWrite(req, res, { milestoneId, featureSupport });
     if (!project) {
       return;
     }
@@ -186,10 +319,8 @@ const uploadAttachment = async (req, res) => {
       return res.status(400).json({ error: 'File is required' });
     }
 
-    const storageAdapter = getStorageAdapter();
-    const featureSupport = await getAttachmentFeatureSupport();
     const nextVersion = featureSupport.versioning
-      ? await getNextVersion(project.project_id, req.file.originalname)
+      ? await getNextVersion(project.project_id, req.file.originalname, milestoneId, featureSupport.milestoneScope)
       : 1;
 
     const scanResult = await scanAttachment({
@@ -218,6 +349,10 @@ const uploadAttachment = async (req, res) => {
       status: finalStatus
     };
 
+    if (featureSupport.milestoneScope) {
+      attachmentPayload.milestone_id = milestoneId;
+    }
+
     if (featureSupport.versioning) {
       attachmentPayload.version = nextVersion;
       attachmentPayload.is_latest = true;
@@ -232,16 +367,22 @@ const uploadAttachment = async (req, res) => {
     const attachment = await Attachment.create(attachmentPayload);
 
     if (featureSupport.versioning) {
+      const versionWhere = {
+        project_id: project.project_id,
+        filename: req.file.originalname,
+        id: {
+          [Op.ne]: attachment.id
+        }
+      };
+
+      if (featureSupport.milestoneScope) {
+        versionWhere.milestone_id = milestoneId;
+      }
+
       await Attachment.update(
         { is_latest: false },
         {
-          where: {
-            project_id: project.project_id,
-            filename: req.file.originalname,
-            id: {
-              [Op.ne]: attachment.id
-            }
-          }
+          where: versionWhere
         }
       );
     }
@@ -263,18 +404,37 @@ const uploadAttachment = async (req, res) => {
 
 const listProjectAttachments = async (req, res) => {
   try {
-    const project = await getAuthorizedProjectForRead(req, res);
+    const featureSupport = await getAttachmentFeatureSupport();
+    const milestoneParsing = parseOptionalMilestoneId(req.query?.milestone_id);
+    if (milestoneParsing.error) {
+      return res.status(400).json({ error: milestoneParsing.error });
+    }
+
+    const milestoneId = milestoneParsing.milestoneId;
+
+    const project = await getAuthorizedProjectForRead(req, res, { milestoneId, featureSupport });
     if (!project) {
       return;
     }
 
     const includeAllVersions = String(req.query.includeAllVersions || '').toLowerCase() === 'true';
-    const featureSupport = await getAttachmentFeatureSupport();
 
     const where = {
       project_id: project.project_id,
       status: 'active'
     };
+
+    if (featureSupport.milestoneScope && milestoneId !== null) {
+      where.milestone_id = milestoneId;
+    }
+
+    if (featureSupport.milestoneScope && req.user.role === 'researcher' && milestoneId === null) {
+      const assignedMilestoneIds = await getAssignedMilestoneIdsForResearcher(req.user.id, project.project_id);
+      where[Op.or] = [
+        { milestone_id: null },
+        { milestone_id: { [Op.in]: assignedMilestoneIds.length > 0 ? assignedMilestoneIds : [-1] } }
+      ];
+    }
 
     if (!includeAllVersions && featureSupport.versioning) {
       where.is_latest = true;
@@ -301,11 +461,11 @@ const listProjectAttachments = async (req, res) => {
 
 const deleteAttachment = async (req, res) => {
   try {
-    const project = await getAuthorizedProjectForWrite(req, res);
+    const featureSupport = await getAttachmentFeatureSupport();
+    const project = await getAuthorizedProjectForWrite(req, res, { featureSupport });
     if (!project) {
       return;
     }
-    const featureSupport = await getAttachmentFeatureSupport();
 
     const attachmentId = Number.parseInt(req.params.attachmentId, 10);
     if (!Number.isInteger(attachmentId)) {
@@ -336,12 +496,18 @@ const deleteAttachment = async (req, res) => {
     await attachment.save();
 
     if (featureSupport.versioning) {
+      const previousVersionWhere = {
+        project_id: project.project_id,
+        filename: attachment.filename,
+        status: 'active'
+      };
+
+      if (featureSupport.milestoneScope) {
+        previousVersionWhere.milestone_id = attachment.milestone_id || null;
+      }
+
       const previousVersion = await Attachment.findOne({
-        where: {
-          project_id: project.project_id,
-          filename: attachment.filename,
-          status: 'active'
-        },
+        where: previousVersionWhere,
         order: [['version', 'DESC']]
       });
 
@@ -360,7 +526,8 @@ const deleteAttachment = async (req, res) => {
 
 const downloadAttachment = async (req, res) => {
   try {
-    const project = await getAuthorizedProjectForRead(req, res);
+    const featureSupport = await getAttachmentFeatureSupport();
+    const project = await getAuthorizedProjectForRead(req, res, { featureSupport });
     if (!project) {
       return;
     }
@@ -380,6 +547,22 @@ const downloadAttachment = async (req, res) => {
 
     if (!attachment) {
       return res.status(404).json({ error: 'Attachment not found' });
+    }
+
+    if (
+      featureSupport.milestoneScope
+      && req.user.role === 'researcher'
+      && attachment.milestone_id !== null
+    ) {
+      const researcherMilestoneAccess = await canResearcherAccessMilestone({
+        researcherId: req.user.id,
+        projectId: project.project_id,
+        milestoneId: attachment.milestone_id
+      });
+
+      if (!researcherMilestoneAccess) {
+        return res.status(403).json({ error: 'Unauthorized for milestone access' });
+      }
     }
 
     const storageAdapter = getStorageAdapter();

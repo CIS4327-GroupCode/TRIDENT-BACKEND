@@ -11,6 +11,8 @@ const {
   Project,
   Application,
   ResearcherProfile,
+  Milestone,
+  MilestoneResearcher,
   Attachment
 } = require('../../src/database/models');
 
@@ -24,6 +26,7 @@ describe('Attachment Routes Integration', () => {
   let unrelatedResearcher;
   let unrelatedResearcherToken;
   let project;
+  let milestone;
 
   const storageRoot = process.env.ATTACHMENT_LOCAL_PATH
     ? path.resolve(process.env.ATTACHMENT_LOCAL_PATH)
@@ -31,6 +34,7 @@ describe('Attachment Routes Integration', () => {
 
   beforeAll(async () => {
     await sequelize.authenticate();
+    await MilestoneResearcher.sync({ alter: true });
     await Attachment.sync({ alter: true });
 
     nonprofitUser = await User.create({
@@ -52,6 +56,12 @@ describe('Attachment Routes Integration', () => {
       title: 'Attachment Test Project',
       org_id: org.id,
       status: 'open'
+    });
+
+    milestone = await Milestone.create({
+      project_id: project.project_id,
+      name: 'Milestone Attachment Scope',
+      status: 'pending'
     });
 
     unauthorizedNonprofit = await User.create({
@@ -87,6 +97,12 @@ describe('Attachment Routes Integration', () => {
       project_id: project.project_id,
       status: 'accepted',
       type: 'project_application'
+    });
+
+    await MilestoneResearcher.create({
+      milestone_id: milestone.id,
+      researcher_id: researcherUser.id,
+      assigned_by: nonprofitUser.id
     });
 
     unrelatedResearcher = await User.create({
@@ -128,12 +144,38 @@ describe('Attachment Routes Integration', () => {
   });
 
   afterAll(async () => {
-    await Attachment.destroy({ where: { project_id: project.project_id }, force: true });
-    await Application.destroy({ where: { project_id: project.project_id }, force: true });
-    await Project.destroy({ where: { project_id: project.project_id }, force: true });
-    await ResearcherProfile.destroy({ where: { user_id: [researcherUser.id, unrelatedResearcher.id] }, force: true });
-    await User.destroy({ where: { id: [nonprofitUser.id, unauthorizedNonprofit.id, researcherUser.id, unrelatedResearcher.id] }, force: true });
-    await Organization.destroy({ where: { id: [nonprofitUser.org_id, unauthorizedNonprofit.org_id] }, force: true });
+    if (project?.project_id) {
+      await Attachment.destroy({ where: { project_id: project.project_id }, force: true });
+      await Application.destroy({ where: { project_id: project.project_id }, force: true });
+      await Project.destroy({ where: { project_id: project.project_id }, force: true });
+    }
+
+    if (milestone?.id) {
+      await MilestoneResearcher.destroy({ where: { milestone_id: milestone.id }, force: true });
+      await Milestone.destroy({ where: { id: milestone.id }, force: true });
+    }
+
+    if (researcherUser?.id || unrelatedResearcher?.id) {
+      await ResearcherProfile.destroy({ where: { user_id: [researcherUser?.id, unrelatedResearcher?.id].filter(Boolean) }, force: true });
+    }
+
+    if (nonprofitUser?.id || unauthorizedNonprofit?.id || researcherUser?.id || unrelatedResearcher?.id) {
+      await User.destroy({
+        where: {
+          id: [nonprofitUser?.id, unauthorizedNonprofit?.id, researcherUser?.id, unrelatedResearcher?.id].filter(Boolean)
+        },
+        force: true
+      });
+    }
+
+    if (nonprofitUser?.org_id || unauthorizedNonprofit?.org_id) {
+      await Organization.destroy({
+        where: {
+          id: [nonprofitUser?.org_id, unauthorizedNonprofit?.org_id].filter(Boolean)
+        },
+        force: true
+      });
+    }
 
     if (fs.existsSync(storageRoot)) {
       await fs.promises.rm(storageRoot, { recursive: true, force: true });
@@ -245,6 +287,35 @@ describe('Attachment Routes Integration', () => {
 
       await request(app)
         .delete(`/api/projects/${project.project_id}/attachments/${attachmentId}`)
+        .set('Authorization', `Bearer ${nonprofitToken}`);
+    });
+
+    it('allows researcher upload when assigned to milestone and blocks unassigned researcher', async () => {
+      const assignedUpload = await request(app)
+        .post(`/api/projects/${project.project_id}/attachments`)
+        .set('Authorization', `Bearer ${researcherToken}`)
+        .field('milestone_id', String(milestone.id))
+        .attach('file', Buffer.from('researcher upload content'), {
+          filename: 'milestone-note.txt',
+          contentType: 'text/plain'
+        });
+
+      expect(assignedUpload.status).toBe(201);
+      expect(assignedUpload.body.attachment.milestone_id).toBe(milestone.id);
+
+      const unassignedUpload = await request(app)
+        .post(`/api/projects/${project.project_id}/attachments`)
+        .set('Authorization', `Bearer ${unrelatedResearcherToken}`)
+        .field('milestone_id', String(milestone.id))
+        .attach('file', Buffer.from('forbidden upload'), {
+          filename: 'forbidden-note.txt',
+          contentType: 'text/plain'
+        });
+
+      expect(unassignedUpload.status).toBe(403);
+
+      await request(app)
+        .delete(`/api/projects/${project.project_id}/attachments/${assignedUpload.body.attachment.id}`)
         .set('Authorization', `Bearer ${nonprofitToken}`);
     });
   });

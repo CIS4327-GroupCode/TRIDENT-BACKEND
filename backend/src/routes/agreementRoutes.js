@@ -30,5 +30,9 @@ router.post('/:id/complete', agreementController.completeAgreement);
 router.post('/:id/archive', agreementController.archiveAgreement);
 router.post('/:id/amend', agreementController.createAmendment);
 router.post('/:id/terminate', agreementController.terminateAgreement);
+router.get('/:id/removal-requests', agreementController.listAgreementRemovalRequests);
+router.post('/:id/removal-requests', agreementController.requestAgreementRemoval);
+router.post('/:id/removal-requests/:requestId/approve', agreementController.approveAgreementRemovalRequest);
+router.post('/:id/removal-requests/:requestId/reject', agreementController.rejectAgreementRemovalRequest);
 
 module.exports = router;

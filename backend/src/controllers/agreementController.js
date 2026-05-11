@@ -4,10 +4,15 @@ const { Op } = require('sequelize');
 const {
   Contract,
   ContractReview,
+  AgreementRemovalRequest,
   Application,
   Attachment,
   Project,
-  User
+  User,
+  Milestone,
+  MilestoneResearcher,
+  ProjectResearcherAccess,
+  sequelize
 } = require('../database/models');
 const notificationService = require('../services/notificationService');
 const pdfService = require('../services/pdfService');
@@ -130,6 +135,147 @@ function normalizeDataClassification(value, containsSensitiveData) {
   return normalized;
 }
 
+function parseMilestoneReferencesInput(value) {
+  if (value === undefined) {
+    return { provided: false, references: [] };
+  }
+
+  if (!Array.isArray(value)) {
+    return { error: 'milestone_references must be an array' };
+  }
+
+  const deduped = [];
+  const keySet = new Set();
+
+  for (const item of value) {
+    if (!item || typeof item !== 'object') {
+      return { error: 'milestone_references items must be objects' };
+    }
+
+    const milestoneId = Number.parseInt(item.milestone_id, 10);
+    const researcherId = Number.parseInt(item.researcher_id, 10);
+    if (!Number.isInteger(milestoneId) || milestoneId <= 0) {
+      return { error: 'milestone_references[].milestone_id must be a positive integer' };
+    }
+    if (!Number.isInteger(researcherId) || researcherId <= 0) {
+      return { error: 'milestone_references[].researcher_id must be a positive integer' };
+    }
+
+    const key = `${milestoneId}:${researcherId}`;
+    if (!keySet.has(key)) {
+      keySet.add(key);
+      deduped.push({ milestone_id: milestoneId, researcher_id: researcherId });
+    }
+  }
+
+  return { provided: true, references: deduped };
+}
+
+async function validateMilestoneReferencesForProject(projectId, references) {
+  if (!references.length) {
+    return { ok: true, references: [] };
+  }
+
+  const milestoneIds = [...new Set(references.map((ref) => ref.milestone_id))];
+  const researcherIds = [...new Set(references.map((ref) => ref.researcher_id))];
+
+  const [milestones, researchers, acceptedApplications, assignments, projectWideAccess] = await Promise.all([
+    Milestone.findAll({
+      where: {
+        project_id: projectId,
+        id: milestoneIds
+      },
+      attributes: ['id']
+    }),
+    User.findAll({
+      where: {
+        id: researcherIds,
+        role: 'researcher'
+      },
+      attributes: ['id']
+    }),
+    Application.findAll({
+      where: {
+        project_id: projectId,
+        researcher_id: researcherIds,
+        status: 'accepted'
+      },
+      attributes: ['researcher_id']
+    }),
+    MilestoneResearcher.findAll({
+      where: {
+        milestone_id: milestoneIds,
+        researcher_id: researcherIds
+      },
+      attributes: ['milestone_id', 'researcher_id']
+    }),
+    ProjectResearcherAccess.findAll({
+      where: {
+        project_id: projectId,
+        researcher_id: researcherIds,
+        whole_project: true
+      },
+      attributes: ['researcher_id']
+    })
+  ]);
+
+  const validMilestoneIds = new Set(milestones.map((milestone) => milestone.id));
+  const validResearcherIds = new Set(researchers.map((researcher) => researcher.id));
+  const acceptedResearcherIds = new Set(acceptedApplications.map((application) => application.researcher_id));
+  const projectWideResearcherIds = new Set(projectWideAccess.map((entry) => entry.researcher_id));
+  const assignmentPairs = new Set(assignments.map((assignment) => `${assignment.milestone_id}:${assignment.researcher_id}`));
+
+  for (const reference of references) {
+    if (!validMilestoneIds.has(reference.milestone_id)) {
+      return {
+        ok: false,
+        status: 400,
+        message: `milestone_id ${reference.milestone_id} does not belong to this project`
+      };
+    }
+
+    if (!validResearcherIds.has(reference.researcher_id)) {
+      return {
+        ok: false,
+        status: 400,
+        message: `researcher_id ${reference.researcher_id} is not a researcher user`
+      };
+    }
+
+    if (!acceptedResearcherIds.has(reference.researcher_id)) {
+      return {
+        ok: false,
+        status: 400,
+        message: `researcher_id ${reference.researcher_id} is not accepted on this project`
+      };
+    }
+
+    const key = `${reference.milestone_id}:${reference.researcher_id}`;
+    if (!projectWideResearcherIds.has(reference.researcher_id) && !assignmentPairs.has(key)) {
+      return {
+        ok: false,
+        status: 400,
+        message: `researcher_id ${reference.researcher_id} is not assigned to milestone_id ${reference.milestone_id}`
+      };
+    }
+  }
+
+  return { ok: true, references };
+}
+
+function mergeAgreementMetadataWithReferences(existingMetadata, references, provided) {
+  if (!provided) {
+    return existingMetadata;
+  }
+
+  const nextMetadata = {
+    ...(existingMetadata || {})
+  };
+
+  nextMetadata.milestone_references = references;
+  return nextMetadata;
+}
+
 function determineReviewRequired({ sourceKind, containsSensitiveData, explicitValue }) {
   if (explicitValue !== undefined) {
     return parseBooleanInput(explicitValue, false);
@@ -229,6 +375,9 @@ function sanitizeContractResponse(contract) {
   const plain = contract.toJSON();
   if (plain.variables && typeof plain.variables === 'object') {
     plain.variables = { ...plain.variables };
+  }
+  if (plain.metadata && typeof plain.metadata === 'object') {
+    plain.metadata = { ...plain.metadata };
   }
   return plain;
 }
@@ -362,9 +511,35 @@ async function createAgreement(req, res) {
     const dataClassification = normalizeDataClassification(req.body.data_classification, containsSensitiveData);
     const retentionPeriodDays = parseOptionalPositiveInt(req.body.retention_period_days);
     const destructionRequired = parseBooleanInput(req.body.destruction_required, containsSensitiveData);
+    const milestoneReferenceParsing = parseMilestoneReferencesInput(req.body.milestone_references);
+    if (milestoneReferenceParsing.error) {
+      return res.status(400).json({ error: milestoneReferenceParsing.error });
+    }
 
     if (!templateType || !title) {
       return res.status(400).json({ error: 'template_type and title are required' });
+    }
+
+    let agreementMetadata;
+    if (milestoneReferenceParsing.provided) {
+      const appResult = await resolveAcceptedApplication(applicationId);
+      if (appResult.error) {
+        return sendAgreementError(res, appResult.error.status, appResult.error.message);
+      }
+
+      const referenceValidation = await validateMilestoneReferencesForProject(
+        appResult.application.project_id,
+        milestoneReferenceParsing.references
+      );
+      if (!referenceValidation.ok) {
+        return sendAgreementError(res, referenceValidation.status, referenceValidation.message);
+      }
+
+      agreementMetadata = mergeAgreementMetadataWithReferences(
+        null,
+        referenceValidation.references,
+        true
+      );
     }
 
     const result = await createAgreementTransition({
@@ -381,6 +556,7 @@ async function createAgreement(req, res) {
       dataClassification,
       retentionPeriodDays,
       destructionRequired,
+      agreementMetadata,
       resolveAcceptedApplication,
       resolveAgreementSource
     });
@@ -604,6 +780,27 @@ async function updateAgreement(req, res) {
     const nextDestructionRequired = req.body.destruction_required !== undefined
       ? parseBooleanInput(req.body.destruction_required, false)
       : contract.destruction_required;
+    const milestoneReferenceParsing = parseMilestoneReferencesInput(req.body.milestone_references);
+    if (milestoneReferenceParsing.error) {
+      return res.status(400).json({ error: milestoneReferenceParsing.error });
+    }
+
+    let nextMetadata;
+    if (milestoneReferenceParsing.provided) {
+      const referenceValidation = await validateMilestoneReferencesForProject(
+        contract.project_id,
+        milestoneReferenceParsing.references
+      );
+      if (!referenceValidation.ok) {
+        return sendAgreementError(res, referenceValidation.status, referenceValidation.message);
+      }
+
+      nextMetadata = mergeAgreementMetadataWithReferences(
+        contract.metadata,
+        referenceValidation.references,
+        true
+      );
+    }
 
     if (!nextTitle) {
       return res.status(400).json({ error: 'title cannot be empty' });
@@ -623,6 +820,7 @@ async function updateAgreement(req, res) {
       nextDataClassification,
       nextRetentionPeriodDays,
       nextDestructionRequired,
+      nextMetadata,
       resolveAgreementSource
     });
 
@@ -1334,6 +1532,10 @@ async function createAmendment(req, res) {
       return res.status(400).json({ error: 'Invalid agreement id' });
     }
     const reason = String(req.body.reason || '').trim();
+    const milestoneReferenceParsing = parseMilestoneReferencesInput(req.body.milestone_references);
+    if (milestoneReferenceParsing.error) {
+      return res.status(400).json({ error: milestoneReferenceParsing.error });
+    }
 
     const result = await createAmendmentTransition({
       agreementId,
@@ -1343,6 +1545,25 @@ async function createAmendment(req, res) {
 
     if (result.error) {
       return sendAgreementError(res, result.error.status, result.error.message);
+    }
+
+    if (milestoneReferenceParsing.provided) {
+      const referenceValidation = await validateMilestoneReferencesForProject(
+        result.agreement.project_id,
+        milestoneReferenceParsing.references
+      );
+      if (!referenceValidation.ok) {
+        return sendAgreementError(res, referenceValidation.status, referenceValidation.message);
+      }
+
+      const amendment = await Contract.findByPk(result.agreement.id);
+      amendment.metadata = mergeAgreementMetadataWithReferences(
+        amendment.metadata,
+        referenceValidation.references,
+        true
+      );
+      await amendment.save();
+      result.agreement = sanitizeContractResponse(amendment);
     }
 
     await logAudit({
@@ -1378,6 +1599,405 @@ async function createAmendment(req, res) {
   } catch (error) {
     console.error('Create amendment error:', error);
     return sendAgreementError(res, 500, 'Failed to create agreement amendment');
+  }
+}
+
+async function requestAgreementRemoval(req, res) {
+  try {
+    const agreementId = Number.parseInt(req.params.id, 10);
+    if (!Number.isInteger(agreementId)) {
+      return res.status(400).json({ error: 'Invalid agreement id' });
+    }
+
+    const reason = String(req.body.reason || '').trim();
+    if (!reason) {
+      return res.status(400).json({ error: 'reason is required' });
+    }
+
+    const contract = await Contract.findByPk(agreementId);
+    if (!contract) {
+      return res.status(404).json({ error: 'Agreement not found' });
+    }
+
+    if (!isAgreementParty(contract, req.user.id) && !isAdminReviewer(req.user)) {
+      return res.status(403).json({ error: 'You are not authorized to request agreement removal' });
+    }
+
+    if (contract.status === 'archived') {
+      return res.status(400).json({ error: 'Agreement is already archived' });
+    }
+
+    const existingPending = await AgreementRemovalRequest.findOne({
+      where: {
+        contract_id: agreementId,
+        status: 'pending'
+      }
+    });
+    if (existingPending) {
+      return sendAgreementError(res, 409, 'A pending removal request already exists for this agreement');
+    }
+
+    const removalRequest = await sequelize.transaction(async (transaction) => {
+      const created = await AgreementRemovalRequest.create({
+        contract_id: agreementId,
+        requested_by: req.user.id,
+        reason,
+        status: 'pending'
+      }, { transaction });
+
+      await ContractReview.create({
+        contract_id: agreementId,
+        reviewer_id: req.user.id,
+        review_stage: 'post_execution',
+        action: 'removal_requested',
+        previous_status: contract.status,
+        new_status: contract.status,
+        feedback: reason,
+        changes_requested: null
+      }, { transaction });
+
+      return created;
+    });
+
+    await logAudit({
+      actorId: req.user.id,
+      action: AUDIT_ACTIONS.AGREEMENT_REMOVAL_REQUESTED,
+      entityType: 'contract',
+      entityId: agreementId,
+      metadata: {
+        removal_request_id: removalRequest.id,
+        reason
+      }
+    });
+
+    await notifyAdminsForAgreement(contract, {
+      type: 'agreement_removal_requested',
+      title: 'Agreement Removal Requested',
+      message: `${contract.title} has a pending removal request requiring admin review.`,
+      metadata: {
+        agreement_id: contract.id,
+        removal_request_id: removalRequest.id,
+        requested_by: req.user.id
+      }
+    });
+
+    return res.status(201).json({
+      message: 'Agreement removal request submitted',
+      removal_request: removalRequest.toSafeObject()
+    });
+  } catch (error) {
+    console.error('Request agreement removal error:', error);
+    return sendAgreementError(res, 500, 'Failed to submit agreement removal request');
+  }
+}
+
+async function listAgreementRemovalRequests(req, res) {
+  try {
+    const agreementId = Number.parseInt(req.params.id, 10);
+    if (!Number.isInteger(agreementId)) {
+      return res.status(400).json({ error: 'Invalid agreement id' });
+    }
+
+    const contract = await Contract.findByPk(agreementId);
+    if (!contract) {
+      return res.status(404).json({ error: 'Agreement not found' });
+    }
+
+    if (!isAgreementParty(contract, req.user.id) && !isAdminReviewer(req.user)) {
+      return res.status(403).json({ error: 'You are not authorized to view removal requests' });
+    }
+
+    const requests = await AgreementRemovalRequest.findAll({
+      where: { contract_id: agreementId },
+      include: [
+        {
+          model: User,
+          as: 'requester',
+          attributes: ['id', 'name', 'email', 'role']
+        },
+        {
+          model: User,
+          as: 'reviewer',
+          attributes: ['id', 'name', 'email', 'role']
+        }
+      ],
+      order: [['created_at', 'DESC']]
+    });
+
+    return res.json({
+      agreement_id: agreementId,
+      count: requests.length,
+      removal_requests: requests.map((requestRow) => requestRow.toSafeObject())
+    });
+  } catch (error) {
+    console.error('List agreement removal requests error:', error);
+    return sendAgreementError(res, 500, 'Failed to list removal requests');
+  }
+}
+
+async function approveAgreementRemovalRequest(req, res) {
+  try {
+    if (!isAdminReviewer(req.user)) {
+      return res.status(403).json({ error: 'Admin access required' });
+    }
+
+    const agreementId = Number.parseInt(req.params.id, 10);
+    const requestId = Number.parseInt(req.params.requestId, 10);
+    if (!Number.isInteger(agreementId) || !Number.isInteger(requestId)) {
+      return res.status(400).json({ error: 'Invalid agreement id or request id' });
+    }
+
+    const feedback = String(req.body.feedback || '').trim() || null;
+
+    const result = await sequelize.transaction(async (transaction) => {
+      const contract = await Contract.findByPk(agreementId, {
+        transaction,
+        lock: transaction.LOCK.UPDATE
+      });
+      if (!contract) {
+        return { error: { status: 404, message: 'Agreement not found' } };
+      }
+
+      const removalRequest = await AgreementRemovalRequest.findOne({
+        where: {
+          id: requestId,
+          contract_id: agreementId
+        },
+        transaction,
+        lock: transaction.LOCK.UPDATE
+      });
+      if (!removalRequest) {
+        return { error: { status: 404, message: 'Removal request not found' } };
+      }
+      if (removalRequest.status !== 'pending') {
+        return { error: { status: 409, message: 'Removal request has already been resolved' } };
+      }
+
+      const previousStatus = contract.status;
+
+      removalRequest.status = 'approved';
+      removalRequest.reviewed_by = req.user.id;
+      removalRequest.reviewed_at = new Date();
+      removalRequest.feedback = feedback;
+      await removalRequest.save({ transaction });
+
+      contract.status = 'archived';
+      contract.archived_at = new Date();
+      contract.is_current_version = false;
+      contract.metadata = {
+        ...(contract.metadata || {}),
+        removal_request: {
+          id: removalRequest.id,
+          approved_by: req.user.id,
+          approved_at: new Date().toISOString(),
+          reason: removalRequest.reason,
+          feedback
+        }
+      };
+      await contract.save({ transaction });
+
+      await ContractReview.create({
+        contract_id: contract.id,
+        reviewer_id: req.user.id,
+        review_stage: 'post_execution',
+        action: 'removal_approved',
+        previous_status: previousStatus,
+        new_status: contract.status,
+        feedback,
+        changes_requested: null
+      }, { transaction });
+
+      return {
+        agreement: sanitizeContractResponse(contract),
+        removalRequest: removalRequest.toSafeObject(),
+        previousStatus
+      };
+    });
+
+    if (result.error) {
+      return sendAgreementError(res, result.error.status, result.error.message);
+    }
+
+    await logAudit({
+      actorId: req.user.id,
+      action: AUDIT_ACTIONS.AGREEMENT_REMOVAL_APPROVED,
+      entityType: 'contract',
+      entityId: result.agreement.id,
+      metadata: {
+        removal_request_id: result.removalRequest.id,
+        previous_status: result.previousStatus,
+        feedback
+      }
+    });
+
+    await notificationService.createBulkNotifications(
+      [result.agreement.nonprofit_user_id, result.agreement.researcher_user_id],
+      {
+        type: 'agreement_removal_approved',
+        title: 'Agreement Removal Approved',
+        message: `${result.agreement.title} was archived after admin removal approval.`,
+        link: `/agreements/${result.agreement.id}`,
+        metadata: {
+          agreement_id: result.agreement.id,
+          removal_request_id: result.removalRequest.id,
+          approved_by: req.user.id
+        }
+      }
+    );
+
+    return res.json({
+      message: 'Agreement removal request approved',
+      agreement: result.agreement,
+      removal_request: result.removalRequest
+    });
+  } catch (error) {
+    console.error('Approve agreement removal request error:', error);
+    return sendAgreementError(res, 500, 'Failed to approve removal request');
+  }
+}
+
+async function rejectAgreementRemovalRequest(req, res) {
+  try {
+    if (!isAdminReviewer(req.user)) {
+      return res.status(403).json({ error: 'Admin access required' });
+    }
+
+    const agreementId = Number.parseInt(req.params.id, 10);
+    const requestId = Number.parseInt(req.params.requestId, 10);
+    if (!Number.isInteger(agreementId) || !Number.isInteger(requestId)) {
+      return res.status(400).json({ error: 'Invalid agreement id or request id' });
+    }
+
+    const feedback = String(req.body.feedback || '').trim() || null;
+
+    const result = await sequelize.transaction(async (transaction) => {
+      const contract = await Contract.findByPk(agreementId, {
+        transaction,
+        lock: transaction.LOCK.UPDATE
+      });
+      if (!contract) {
+        return { error: { status: 404, message: 'Agreement not found' } };
+      }
+
+      const removalRequest = await AgreementRemovalRequest.findOne({
+        where: {
+          id: requestId,
+          contract_id: agreementId
+        },
+        transaction,
+        lock: transaction.LOCK.UPDATE
+      });
+      if (!removalRequest) {
+        return { error: { status: 404, message: 'Removal request not found' } };
+      }
+      if (removalRequest.status !== 'pending') {
+        return { error: { status: 409, message: 'Removal request has already been resolved' } };
+      }
+
+      removalRequest.status = 'rejected';
+      removalRequest.reviewed_by = req.user.id;
+      removalRequest.reviewed_at = new Date();
+      removalRequest.feedback = feedback;
+      await removalRequest.save({ transaction });
+
+      await ContractReview.create({
+        contract_id: contract.id,
+        reviewer_id: req.user.id,
+        review_stage: 'post_execution',
+        action: 'removal_rejected',
+        previous_status: contract.status,
+        new_status: contract.status,
+        feedback,
+        changes_requested: null
+      }, { transaction });
+
+      return {
+        agreement: sanitizeContractResponse(contract),
+        removalRequest: removalRequest.toSafeObject()
+      };
+    });
+
+    if (result.error) {
+      return sendAgreementError(res, result.error.status, result.error.message);
+    }
+
+    await logAudit({
+      actorId: req.user.id,
+      action: AUDIT_ACTIONS.AGREEMENT_REMOVAL_REJECTED,
+      entityType: 'contract',
+      entityId: result.agreement.id,
+      metadata: {
+        removal_request_id: result.removalRequest.id,
+        feedback
+      }
+    });
+
+    await notificationService.createNotification({
+      userId: result.removalRequest.requested_by,
+      type: 'agreement_removal_rejected',
+      title: 'Agreement Removal Rejected',
+      message: `The removal request for ${result.agreement.title} was rejected by admin review.`,
+      link: `/agreements/${result.agreement.id}`,
+      metadata: {
+        agreement_id: result.agreement.id,
+        removal_request_id: result.removalRequest.id,
+        reviewed_by: req.user.id,
+        feedback
+      }
+    });
+
+    return res.json({
+      message: 'Agreement removal request rejected',
+      removal_request: result.removalRequest
+    });
+  } catch (error) {
+    console.error('Reject agreement removal request error:', error);
+    return sendAgreementError(res, 500, 'Failed to reject removal request');
+  }
+}
+
+async function adminListAgreementRemovalRequests(req, res) {
+  try {
+    const { page, limit, offset } = parsePagination(req);
+    const where = {};
+
+    if (req.query.status) {
+      where.status = String(req.query.status).trim().toLowerCase();
+    }
+
+    const { count, rows } = await AgreementRemovalRequest.findAndCountAll({
+      where,
+      include: [
+        {
+          model: Contract,
+          as: 'agreement',
+          attributes: ['id', 'title', 'status', 'project_id', 'template_type']
+        },
+        {
+          model: User,
+          as: 'requester',
+          attributes: ['id', 'name', 'email', 'role']
+        },
+        {
+          model: User,
+          as: 'reviewer',
+          attributes: ['id', 'name', 'email', 'role']
+        }
+      ],
+      order: [['created_at', 'DESC']],
+      limit,
+      offset
+    });
+
+    return res.json({
+      page,
+      limit,
+      total: count,
+      requests: rows.map((row) => row.toSafeObject())
+    });
+  } catch (error) {
+    console.error('Admin list agreement removal requests error:', error);
+    return res.status(500).json({ error: 'Failed to list agreement removal requests' });
   }
 }
 
@@ -1538,9 +2158,14 @@ module.exports = {
   archiveAgreement,
   terminateAgreement,
   createAmendment,
+  requestAgreementRemoval,
+  listAgreementRemovalRequests,
+  approveAgreementRemovalRequest,
+  rejectAgreementRemovalRequest,
   getTemplates,
   previewAgreement,
   adminListAgreements,
   adminAgreementStats,
-  adminAgreementObservability
+  adminAgreementObservability,
+  adminListAgreementRemovalRequests
 };

@@ -5,13 +5,26 @@ jest.mock('../../src/controllers/agreementController', () => ({
   getTemplates: (req, res) => res.status(200).json({ templates: [{ type: 'NDA' }] }),
   listAgreements: (req, res) => res.status(200).json({ agreements: [] }),
   createAgreement: (req, res) => res.status(201).json({ agreement: { id: 1, ...req.body } }),
+  listAgreementHistory: (req, res) => res.status(200).json({ history: [] }),
+  listAgreementReviews: (req, res) => res.status(200).json({ reviews: [] }),
   getAgreement: (req, res) => res.status(200).json({ agreement: { id: Number(req.params.id) } }),
   updateAgreement: (req, res) => res.status(200).json({ agreement: { id: Number(req.params.id), ...req.body } }),
+  submitAgreementForReview: (req, res) => res.status(200).json({ message: 'submitted' }),
+  reviewAgreement: (req, res) => res.status(200).json({ message: 'reviewed' }),
+  counterpartyReviewAgreement: (req, res) => res.status(200).json({ message: 'reviewed' }),
   previewAgreement: (req, res) => res.status(200).json({ agreement_id: Number(req.params.id), preview: 'Preview body' }),
   signAgreement: (req, res) => res.status(200).json({ message: 'signed' }),
   downloadAgreement: (req, res) => res.status(200).send('PDF-BINARY'),
+  makeAgreementEffective: (req, res) => res.status(200).json({ message: 'effective' }),
   activateAgreement: (req, res) => res.status(200).json({ message: 'activated' }),
-  terminateAgreement: (req, res) => res.status(200).json({ message: 'terminated' })
+  completeAgreement: (req, res) => res.status(200).json({ message: 'completed' }),
+  archiveAgreement: (req, res) => res.status(200).json({ message: 'archived' }),
+  createAmendment: (req, res) => res.status(201).json({ agreement: { id: 2 } }),
+  terminateAgreement: (req, res) => res.status(200).json({ message: 'terminated' }),
+  listAgreementRemovalRequests: (req, res) => res.status(200).json({ removal_requests: [] }),
+  requestAgreementRemoval: (req, res) => res.status(201).json({ removal_request: { id: 1 } }),
+  approveAgreementRemovalRequest: (req, res) => res.status(200).json({ message: 'approved' }),
+  rejectAgreementRemovalRequest: (req, res) => res.status(200).json({ message: 'rejected' })
 }));
 
 jest.mock('../../src/middleware/auth', () => ({
@@ -83,6 +96,29 @@ describe('agreementRoutes integration', () => {
       .set(auth)
       .send({ reason: 'Close project' });
     expect(terminate.status).toBe(200);
+
+    const listRemovalRequests = await request(app)
+      .get('/api/agreements/5/removal-requests')
+      .set(auth);
+    expect(listRemovalRequests.status).toBe(200);
+
+    const createRemovalRequest = await request(app)
+      .post('/api/agreements/5/removal-requests')
+      .set(auth)
+      .send({ reason: 'Duplicate amendment chain' });
+    expect(createRemovalRequest.status).toBe(201);
+
+    const approveRemovalRequest = await request(app)
+      .post('/api/agreements/5/removal-requests/1/approve')
+      .set(auth)
+      .send({ feedback: 'Approved' });
+    expect(approveRemovalRequest.status).toBe(200);
+
+    const rejectRemovalRequest = await request(app)
+      .post('/api/agreements/5/removal-requests/1/reject')
+      .set(auth)
+      .send({ feedback: 'Rejected' });
+    expect(rejectRemovalRequest.status).toBe(200);
 
     const download = await request(app).get('/api/agreements/5/download').set(auth);
     expect(download.status).toBe(200);

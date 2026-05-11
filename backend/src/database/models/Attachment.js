@@ -54,6 +54,15 @@ Attachment.init(
       },
       field: 'project_id'
     },
+    milestone_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      references: {
+        model: 'milestones',
+        key: 'id'
+      },
+      field: 'milestone_id'
+    },
     uploaded_by: {
       type: DataTypes.INTEGER,
       allowNull: false,

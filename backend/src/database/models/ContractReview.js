@@ -51,7 +51,10 @@ ContractReview.init(
           'effective',
           'activated',
           'completed',
-          'archived'
+          'archived',
+          'removal_requested',
+          'removal_approved',
+          'removal_rejected'
         ]]
       }
     },
