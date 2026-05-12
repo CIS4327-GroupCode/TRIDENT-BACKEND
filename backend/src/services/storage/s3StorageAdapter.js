@@ -28,14 +28,15 @@ class S3StorageAdapter extends StorageAdapter {
     return filename.replace(/[^a-zA-Z0-9._-]/g, '_');
   }
 
-  generateStorageKey({ projectId, filename }) {
+  generateStorageKey({ projectId, filename, storagePrefix }) {
     const safeName = this.sanitizeFilename(filename);
     const suffix = crypto.randomBytes(8).toString('hex');
-    return path.posix.join(`project-${projectId}`, `${Date.now()}-${suffix}-${safeName}`);
+    const basePrefix = storagePrefix || `project-${projectId}`;
+    return path.posix.join(basePrefix, `${Date.now()}-${suffix}-${safeName}`);
   }
 
-  async save({ projectId, filename, buffer, mimetype }) {
-    const storageKey = this.generateStorageKey({ projectId, filename });
+  async save({ projectId, filename, buffer, mimetype, storagePrefix }) {
+    const storageKey = this.generateStorageKey({ projectId, filename, storagePrefix });
 
     await this.client.send(new PutObjectCommand({
       Bucket: this.bucket,

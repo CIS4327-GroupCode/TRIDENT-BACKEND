@@ -3,7 +3,7 @@ const sequelize = require('../index');
 
 class Attachment extends Model {
   toSafeObject() {
-    const { ...safeAttachment } = this.toJSON();
+    const { storage_key, ...safeAttachment } = this.toJSON();
     return safeAttachment;
   }
 }
@@ -53,6 +53,15 @@ Attachment.init(
         key: 'project_id'
       },
       field: 'project_id'
+    },
+    milestone_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      references: {
+        model: 'milestones',
+        key: 'id'
+      },
+      field: 'milestone_id'
     },
     uploaded_by: {
       type: DataTypes.INTEGER,

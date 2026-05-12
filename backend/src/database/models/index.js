@@ -6,10 +6,15 @@ const ResearcherProfile = require('./ResearcherProfile');
 const Match = require('./Match');
 const Rating = require('./Rating');
 const Milestone = require('./Milestone');
+const MilestoneResearcher = require('./MilestoneResearcher');
+const MilestoneRevisionRequest = require('./MilestoneRevisionRequest');
+const MilestoneRequest = require('./MilestoneRequest');
+const ProjectResearcherAccess = require('./ProjectResearcherAccess');
 const Message = require('./Message');
 const Thread = require('./Thread');
 const ThreadParticipant = require('./ThreadParticipant');
 const MessageAttachment = require('./MessageAttachment');
+const MessageUploadAsset = require('./MessageUploadAsset');
 const AuditLog = require('./AuditLog');
 const UserPreferences = require('./UserPreferences');
 const ProjectReview = require('./ProjectReview');
@@ -22,7 +27,9 @@ const EmailVerification = require('./EmailVerification');
 const PasswordReset = require('./PasswordReset');
 const TwoFactorCode = require('./TwoFactorCode');
 const Attachment = require('./Attachment');
+const UploadSecurityIncident = require('./UploadSecurityIncident');
 const Contract = require('./Contract');
+const AgreementRemovalRequest = require('./AgreementRemovalRequest');
 const sequelize = require('../index');
 
 // User <-> ResearcherProfile (one-to-one)
@@ -82,6 +89,52 @@ Project.hasMany(Milestone, { foreignKey: 'project_id', as: 'milestones' });
 Milestone.belongsTo(Project, { foreignKey: 'project_id', as: 'project' });
 Milestone.belongsTo(Milestone, { foreignKey: 'depends_on', as: 'dependency' });
 Milestone.hasMany(Milestone, { foreignKey: 'depends_on', as: 'dependents' });
+
+// Milestone <-> MilestoneResearcher
+Milestone.hasMany(MilestoneResearcher, { foreignKey: 'milestone_id', as: 'researcherAssignments' });
+MilestoneResearcher.belongsTo(Milestone, { foreignKey: 'milestone_id', as: 'milestone' });
+
+// User <-> MilestoneResearcher (researcher)
+User.hasMany(MilestoneResearcher, { foreignKey: 'researcher_id', as: 'milestoneAssignments' });
+MilestoneResearcher.belongsTo(User, { foreignKey: 'researcher_id', as: 'researcher' });
+
+// User <-> MilestoneResearcher (assigner)
+User.hasMany(MilestoneResearcher, { foreignKey: 'assigned_by', as: 'createdMilestoneAssignments' });
+MilestoneResearcher.belongsTo(User, { foreignKey: 'assigned_by', as: 'assignedByUser' });
+
+// Milestone <-> MilestoneRevisionRequest
+Milestone.hasMany(MilestoneRevisionRequest, { foreignKey: 'milestone_id', as: 'revisionRequests' });
+MilestoneRevisionRequest.belongsTo(Milestone, { foreignKey: 'milestone_id', as: 'milestone' });
+
+// User <-> MilestoneRevisionRequest
+User.hasMany(MilestoneRevisionRequest, { foreignKey: 'requested_by', as: 'requestedMilestoneRevisions' });
+MilestoneRevisionRequest.belongsTo(User, { foreignKey: 'requested_by', as: 'requester' });
+User.hasMany(MilestoneRevisionRequest, { foreignKey: 'reviewed_by', as: 'reviewedMilestoneRevisions' });
+MilestoneRevisionRequest.belongsTo(User, { foreignKey: 'reviewed_by', as: 'reviewer' });
+
+// Project <-> MilestoneRequest
+Project.hasMany(MilestoneRequest, { foreignKey: 'project_id', as: 'milestoneRequests' });
+MilestoneRequest.belongsTo(Project, { foreignKey: 'project_id', as: 'project' });
+
+// User <-> MilestoneRequest
+User.hasMany(MilestoneRequest, { foreignKey: 'requested_by', as: 'submittedMilestoneRequests' });
+MilestoneRequest.belongsTo(User, { foreignKey: 'requested_by', as: 'requester' });
+User.hasMany(MilestoneRequest, { foreignKey: 'reviewed_by', as: 'reviewedMilestoneRequests' });
+MilestoneRequest.belongsTo(User, { foreignKey: 'reviewed_by', as: 'reviewer' });
+
+// Milestone <-> MilestoneRequest
+Milestone.hasMany(MilestoneRequest, { foreignKey: 'created_milestone_id', as: 'originRequests' });
+MilestoneRequest.belongsTo(Milestone, { foreignKey: 'created_milestone_id', as: 'createdMilestone' });
+
+// Project <-> ProjectResearcherAccess
+Project.hasMany(ProjectResearcherAccess, { foreignKey: 'project_id', as: 'researcherAccess' });
+ProjectResearcherAccess.belongsTo(Project, { foreignKey: 'project_id', as: 'project' });
+
+// User <-> ProjectResearcherAccess
+User.hasMany(ProjectResearcherAccess, { foreignKey: 'researcher_id', as: 'projectAccessGrants' });
+ProjectResearcherAccess.belongsTo(User, { foreignKey: 'researcher_id', as: 'researcher' });
+User.hasMany(ProjectResearcherAccess, { foreignKey: 'assigned_by', as: 'assignedProjectAccessGrants' });
+ProjectResearcherAccess.belongsTo(User, { foreignKey: 'assigned_by', as: 'assignedByUser' });
 
 // Thread <-> Message
 Thread.hasMany(Message, {
@@ -152,6 +205,16 @@ MessageAttachment.belongsTo(Message, {
   as: 'message',
 });
 
+// User <-> MessageUploadAsset
+User.hasMany(MessageUploadAsset, {
+  foreignKey: 'uploaded_by',
+  as: 'messageUploadAssets'
+});
+MessageUploadAsset.belongsTo(User, {
+  foreignKey: 'uploaded_by',
+  as: 'uploader'
+});
+
 // User <-> AuditLog
 User.hasMany(AuditLog, { foreignKey: 'actor_id', as: 'auditLogs' });
 AuditLog.belongsTo(User, { foreignKey: 'actor_id', as: 'actor' });
@@ -200,9 +263,19 @@ SavedProject.belongsTo(Project, { foreignKey: 'project_id', as: 'project' });
 Project.hasMany(Attachment, { foreignKey: 'project_id', as: 'attachments' });
 Attachment.belongsTo(Project, { foreignKey: 'project_id', as: 'project' });
 
+// Milestone <-> Attachment
+Milestone.hasMany(Attachment, { foreignKey: 'milestone_id', as: 'attachments' });
+Attachment.belongsTo(Milestone, { foreignKey: 'milestone_id', as: 'milestone' });
+
 // User <-> Attachment (uploader)
 User.hasMany(Attachment, { foreignKey: 'uploaded_by', as: 'uploadedAttachments' });
 Attachment.belongsTo(User, { foreignKey: 'uploaded_by', as: 'uploader' });
+
+// User <-> UploadSecurityIncident
+User.hasMany(UploadSecurityIncident, { foreignKey: 'user_id', as: 'uploadSecurityIncidents' });
+UploadSecurityIncident.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
+User.hasMany(UploadSecurityIncident, { foreignKey: 'reviewed_by', as: 'reviewedUploadSecurityIncidents' });
+UploadSecurityIncident.belongsTo(User, { foreignKey: 'reviewed_by', as: 'reviewer' });
 
 // Application <-> Contract
 Application.hasMany(Contract, { foreignKey: 'application_id', as: 'contracts' });
@@ -241,6 +314,16 @@ ContractReview.belongsTo(Contract, { foreignKey: 'contract_id', as: 'contract' }
 User.hasMany(ContractReview, { foreignKey: 'reviewer_id', as: 'contractReviews' });
 ContractReview.belongsTo(User, { foreignKey: 'reviewer_id', as: 'reviewer' });
 
+// Contract <-> AgreementRemovalRequest
+Contract.hasMany(AgreementRemovalRequest, { foreignKey: 'contract_id', as: 'removalRequests' });
+AgreementRemovalRequest.belongsTo(Contract, { foreignKey: 'contract_id', as: 'agreement' });
+
+// User <-> AgreementRemovalRequest
+User.hasMany(AgreementRemovalRequest, { foreignKey: 'requested_by', as: 'requestedAgreementRemovals' });
+AgreementRemovalRequest.belongsTo(User, { foreignKey: 'requested_by', as: 'requester' });
+User.hasMany(AgreementRemovalRequest, { foreignKey: 'reviewed_by', as: 'reviewedAgreementRemovals' });
+AgreementRemovalRequest.belongsTo(User, { foreignKey: 'reviewed_by', as: 'reviewer' });
+
 module.exports = {
   User,
   Organization,
@@ -250,10 +333,15 @@ module.exports = {
   Match,
   Rating,
   Milestone,
+  MilestoneResearcher,
+  MilestoneRevisionRequest,
+  MilestoneRequest,
+  ProjectResearcherAccess,
   Message,
   Thread,
   ThreadParticipant,
   MessageAttachment,
+  MessageUploadAsset,
   AuditLog,
   UserPreferences,
   ProjectReview,
@@ -266,6 +354,8 @@ module.exports = {
   PasswordReset,
   TwoFactorCode,
   Attachment,
+  UploadSecurityIncident,
   Contract,
+  AgreementRemovalRequest,
   sequelize
 };

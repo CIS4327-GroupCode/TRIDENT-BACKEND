@@ -30,7 +30,27 @@ jest.mock('../../src/database/models', () => ({
     findAll: jest.fn(),
     findAndCountAll: jest.fn()
   },
-  ProjectReview: {},
+  Attachment: {
+    findByPk: jest.fn(),
+    findAndCountAll: jest.fn(),
+    count: jest.fn(),
+    sum: jest.fn()
+  },
+  MessageUploadAsset: {
+    findByPk: jest.fn(),
+    findAndCountAll: jest.fn(),
+    count: jest.fn(),
+    sum: jest.fn()
+  },
+  UploadSecurityIncident: {
+    findByPk: jest.fn(),
+    findAndCountAll: jest.fn(),
+    count: jest.fn()
+  },
+  ProjectReview: {
+    create: jest.fn(),
+    findOne: jest.fn()
+  },
   sequelize: {
     query: jest.fn()
   }
@@ -44,9 +64,36 @@ jest.mock('../../src/services/notificationService', () => ({
   createNotification: jest.fn(),
 }));
 
+jest.mock('../../src/utils/auditLogger', () => ({
+  AUDIT_ACTIONS: {
+    ADMIN_BULK_USER_APPROVED: 'ADMIN_BULK_USER_APPROVED',
+    ADMIN_BULK_PROJECT_STATUS_UPDATED: 'ADMIN_BULK_PROJECT_STATUS_UPDATED',
+    ADMIN_UPLOAD_INCIDENT_RESOLVED: 'ADMIN_UPLOAD_INCIDENT_RESOLVED',
+    ADMIN_MESSAGE_UPLOAD_ASSET_FORCE_DELETED: 'ADMIN_MESSAGE_UPLOAD_ASSET_FORCE_DELETED',
+    ADMIN_ATTACHMENT_FORCE_DELETED: 'ADMIN_ATTACHMENT_FORCE_DELETED',
+  },
+  logAudit: jest.fn().mockResolvedValue(undefined),
+}));
+
+jest.mock('../../src/utils/bulkJobStore', () => ({
+  createBulkJob: jest.fn(),
+  updateBulkJob: jest.fn(),
+  getBulkJob: jest.fn(),
+}));
+
 const bcrypt = require('bcryptjs');
 const adminController = require('../../src/controllers/adminController');
-const { User, Organization, ResearcherProfile, Project, Milestone, sequelize } = require('../../src/database/models');
+const {
+  User,
+  Organization,
+  ResearcherProfile,
+  Project,
+  Milestone,
+  Attachment,
+  MessageUploadAsset,
+  UploadSecurityIncident,
+  sequelize
+} = require('../../src/database/models');
 const notificationService = require('../../src/services/notificationService');
 
 describe('Admin Controller', () => {
@@ -398,6 +445,134 @@ describe('Admin Controller', () => {
     });
   });
 
+  describe('upload governance', () => {
+    it('should return upload incident stats successfully', async () => {
+      UploadSecurityIncident.count
+        .mockResolvedValueOnce(10)
+        .mockResolvedValueOnce(4)
+        .mockResolvedValueOnce(6)
+        .mockResolvedValueOnce(8)
+        .mockResolvedValueOnce(2)
+        .mockResolvedValueOnce(3)
+        .mockResolvedValueOnce(5)
+        .mockResolvedValueOnce(7)
+        .mockResolvedValueOnce(3);
+
+      await adminController.getUploadSecurityIncidentStats(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json).toHaveBeenCalledWith({
+        stats: {
+          totalIncidents: 10,
+          openIncidents: 4,
+          resolvedIncidents: 6,
+          infectedIncidents: 8,
+          scanErrorIncidents: 2,
+          suspendedUploaders: 3,
+          recentIncidents7d: 5,
+          attachmentIncidents: 7,
+          messageIncidents: 3
+        }
+      });
+    });
+
+    it('should resolve an upload incident', async () => {
+      req.params.id = '12';
+      req.body = { resolution_notes: 'False positive confirmed and user restored.' };
+
+      const mockIncident = {
+        id: 12,
+        status: 'open',
+        auto_suspension_state: 'suspended',
+        scan_status: 'infected',
+        surface: 'message_attachment',
+        save: jest.fn().mockResolvedValue(true)
+      };
+
+      UploadSecurityIncident.findByPk.mockResolvedValue(mockIncident);
+
+      await adminController.resolveUploadSecurityIncident(req, res);
+
+      expect(mockIncident.status).toBe('resolved');
+      expect(mockIncident.reviewed_by).toBe(req.user.id);
+      expect(mockIncident.resolution_notes).toBe('False positive confirmed and user restored.');
+      expect(mockIncident.save).toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+        message: 'Upload incident resolved successfully'
+      }));
+    });
+
+    it('should list message upload assets with pagination', async () => {
+      req.query = { page: 1, limit: 20, status: 'attached', search: 'chat' };
+      const rows = [{ id: 4, file_name: 'chat-note.txt', status: 'attached' }];
+
+      MessageUploadAsset.findAndCountAll.mockResolvedValue({
+        count: 1,
+        rows
+      });
+
+      await adminController.getMessageUploadAssets(req, res);
+
+      expect(MessageUploadAsset.findAndCountAll).toHaveBeenCalledWith(expect.objectContaining({
+        where: expect.objectContaining({
+          status: 'attached',
+          file_name: expect.any(Object)
+        })
+      }));
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json).toHaveBeenCalledWith({
+        assets: rows,
+        pagination: {
+          total: 1,
+          page: 1,
+          limit: 20,
+          totalPages: 1
+        }
+      });
+    });
+
+    it('should force-delete a message upload asset', async () => {
+      req.params.id = '7';
+      const save = jest.fn().mockResolvedValue(true);
+      MessageUploadAsset.findByPk.mockResolvedValue({
+        id: 7,
+        uploaded_by: 22,
+        file_name: 'evidence.txt',
+        storage_key: 'messages/user-22/evidence.txt',
+        status: 'attached',
+        save
+      });
+
+      await adminController.forceDeleteMessageUploadAsset(req, res);
+
+      expect(save).toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json).toHaveBeenCalledWith({ message: 'Message upload asset force-deleted successfully' });
+    });
+
+    it('should log and delete a project attachment on force delete', async () => {
+      req.params.id = '9';
+      const save = jest.fn().mockResolvedValue(true);
+      Attachment.findByPk.mockResolvedValue({
+        id: 9,
+        filename: 'report.pdf',
+        project_id: 31,
+        uploaded_by: 15,
+        storage_key: 'project-31/report.pdf',
+        status: 'active',
+        is_latest: true,
+        save
+      });
+
+      await adminController.forceDeleteAttachment(req, res);
+
+      expect(save).toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json).toHaveBeenCalledWith({ message: 'Attachment force-deleted successfully' });
+    });
+  });
+
   describe('exportAdminData', () => {
     beforeEach(() => {
       res.setHeader = jest.fn();
@@ -502,6 +677,70 @@ describe('Admin Controller', () => {
 
       expect(res.status).toHaveBeenCalledWith(500);
       expect(res.json).toHaveBeenCalledWith({ error: 'Failed to export data' });
+    });
+  });
+
+  describe('bulkUsers', () => {
+    it('should approve multiple pending users', async () => {
+      req.body = { action: 'approve', ids: [1, 2] };
+
+      const pendingUserFactory = (id) => ({
+        id,
+        role: 'researcher',
+        account_status: 'pending',
+        deleted_at: null,
+        save: jest.fn().mockResolvedValue(true),
+      });
+
+      User.findByPk
+        .mockResolvedValueOnce(pendingUserFactory(1))
+        .mockResolvedValueOnce(pendingUserFactory(2));
+
+      await adminController.bulkUsers(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      const response = res.json.mock.calls[0][0];
+      expect(response.summary.processed).toBe(2);
+      expect(response.summary.failed).toBe(0);
+      expect(response.summary.skipped).toBe(0);
+    });
+
+    it('should reject delete action without explicit confirmation', async () => {
+      req.body = { action: 'delete', ids: [1, 2] };
+
+      await adminController.bulkUsers(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          error: expect.stringContaining('Confirmation required')
+        })
+      );
+    });
+  });
+
+  describe('bulkProjects', () => {
+    it('should update status for selected projects', async () => {
+      req.body = { action: 'update_status', ids: [10], status: 'open' };
+
+      const mockProject = {
+        project_id: 10,
+        status: 'draft',
+        update: jest.fn().mockImplementation(async ({ status }) => {
+          mockProject.status = status;
+          return mockProject;
+        }),
+      };
+
+      Project.findByPk.mockResolvedValue(mockProject);
+
+      await adminController.bulkProjects(req, res);
+
+      expect(mockProject.update).toHaveBeenCalledWith({ status: 'open' });
+      expect(res.status).toHaveBeenCalledWith(200);
+      const response = res.json.mock.calls[0][0];
+      expect(response.summary.processed).toBe(1);
+      expect(response.summary.failed).toBe(0);
     });
   });
 });

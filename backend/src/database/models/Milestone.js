@@ -78,11 +78,18 @@ Milestone.init(
       field: 'due_date'
     },
     status: {
-      type: DataTypes.ENUM('pending', 'in_progress', 'completed', 'cancelled'),
+      type: DataTypes.ENUM(
+        'pending',
+        'in_progress',
+        'completed',
+        'cancelled',
+        'revision_requested',
+        'revision_in_progress'
+      ),
       allowNull: false,
       defaultValue: 'pending',
       validate: {
-        isIn: [['pending', 'in_progress', 'completed', 'cancelled']]
+        isIn: [['pending', 'in_progress', 'completed', 'cancelled', 'revision_requested', 'revision_in_progress']]
       }
     },
     completed_at: {

@@ -27,6 +27,9 @@ function sanitizeContractResponse(contract) {
   if (plain.variables && typeof plain.variables === 'object') {
     plain.variables = { ...plain.variables };
   }
+  if (plain.metadata && typeof plain.metadata === 'object') {
+    plain.metadata = { ...plain.metadata };
+  }
   return plain;
 }
 
@@ -130,6 +133,7 @@ async function createAgreementTransition({
   dataClassification,
   retentionPeriodDays,
   destructionRequired,
+  agreementMetadata,
   resolveAcceptedApplication,
   resolveAgreementSource
 }) {
@@ -204,7 +208,8 @@ async function createAgreementTransition({
       rendered_content: sourcePayload.renderedContent,
       content_snapshot: sourcePayload.contentSnapshot,
       version_number: 1,
-      is_current_version: true
+      is_current_version: true,
+      metadata: agreementMetadata || null
     }, { transaction });
 
     if (!contract.root_contract_id) {
@@ -788,6 +793,7 @@ async function updateAgreementDraftTransition({
   nextDataClassification,
   nextRetentionPeriodDays,
   nextDestructionRequired,
+  nextMetadata,
   resolveAgreementSource
 }) {
   return observeTransition({
@@ -837,7 +843,8 @@ async function updateAgreementDraftTransition({
       contains_sensitive_data: contract.contains_sensitive_data,
       data_classification: contract.data_classification,
       retention_period_days: contract.retention_period_days,
-      destruction_required: contract.destruction_required
+      destruction_required: contract.destruction_required,
+      metadata: contract.metadata || null
     };
 
     contract.source_kind = sourcePayload.sourceKind;
@@ -850,6 +857,9 @@ async function updateAgreementDraftTransition({
     contract.data_classification = nextDataClassification;
     contract.retention_period_days = nextRetentionPeriodDays;
     contract.destruction_required = nextDestructionRequired;
+    if (nextMetadata !== undefined) {
+      contract.metadata = nextMetadata;
+    }
     contract.variables = sourcePayload.variables;
     contract.rendered_content = sourcePayload.renderedContent;
     contract.content_snapshot = sourcePayload.contentSnapshot;
@@ -869,7 +879,8 @@ async function updateAgreementDraftTransition({
         contains_sensitive_data: agreement.contains_sensitive_data,
         data_classification: agreement.data_classification,
         retention_period_days: agreement.retention_period_days,
-        destruction_required: agreement.destruction_required
+        destruction_required: agreement.destruction_required,
+        metadata: agreement.metadata || null
       }
     };
   }));

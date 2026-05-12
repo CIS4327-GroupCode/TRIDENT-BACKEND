@@ -13,10 +13,11 @@ class LocalDiskStorageAdapter extends StorageAdapter {
     return filename.replace(/[^a-zA-Z0-9._-]/g, '_');
   }
 
-  generateStorageKey({ projectId, filename }) {
+  generateStorageKey({ projectId, filename, storagePrefix }) {
     const safeName = this.sanitizeFilename(filename);
     const suffix = crypto.randomBytes(8).toString('hex');
-    return path.join(`project-${projectId}`, `${Date.now()}-${suffix}-${safeName}`);
+    const basePrefix = storagePrefix || `project-${projectId}`;
+    return path.join(basePrefix, `${Date.now()}-${suffix}-${safeName}`);
   }
 
   async ensureDirectory(filePath) {
@@ -28,8 +29,8 @@ class LocalDiskStorageAdapter extends StorageAdapter {
     return path.resolve(this.basePath, storageKey);
   }
 
-  async save({ projectId, filename, buffer }) {
-    const storageKey = this.generateStorageKey({ projectId, filename });
+  async save({ projectId, filename, buffer, storagePrefix }) {
+    const storageKey = this.generateStorageKey({ projectId, filename, storagePrefix });
     const destinationPath = this.resolvePath(storageKey);
     await this.ensureDirectory(destinationPath);
     await fs.promises.writeFile(destinationPath, buffer);

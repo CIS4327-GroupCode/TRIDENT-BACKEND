@@ -73,6 +73,12 @@ Notification.init(
           'milestone_completed',
           'milestone_deadline_approaching',
           'milestone_overdue',
+          'milestone_revision_requested',
+          'milestone_revision_approved',
+          'milestone_revision_rejected',
+          'milestone_request_created',
+          'milestone_request_approved',
+          'milestone_request_rejected',
           // Message events
           'message_received',
           // Admin events
@@ -99,6 +105,9 @@ Notification.init(
           'agreement_archived',
           'agreement_amendment_created',
           'agreement_terminated',
+          'agreement_removal_requested',
+          'agreement_removal_approved',
+          'agreement_removal_rejected',
           // Matching events
           'new_match_available',
           // Rating events

@@ -3,7 +3,9 @@ const request = require('supertest');
 
 jest.mock('../../src/controllers/adminController', () => ({
   getDashboardStats: (req, res) => res.status(200).json({}),
+  getBulkJobStatus: (req, res) => res.status(200).json({ jobId: req.params.jobId, status: 'queued' }),
   getAllUsers: (req, res) => res.status(200).json({ users: [] }),
+  bulkUsers: (req, res) => res.status(200).json({ summary: { processed: 0, skipped: 0, failed: 0 } }),
   getUserDetails: (req, res) => res.status(200).json({ user: {} }),
   updateUserStatus: (req, res) => res.status(200).json({}),
   approveUser: (req, res) => res.status(200).json({}),
@@ -12,6 +14,7 @@ jest.mock('../../src/controllers/adminController', () => ({
   permanentlyDeleteUser: (req, res) => res.status(200).json({}),
   createAdmin: (req, res) => res.status(201).json({ message: 'Admin account created successfully', user: {} }),
   getAllProjects: (req, res) => res.status(200).json({ projects: [] }),
+  bulkProjects: (req, res) => res.status(200).json({ summary: { processed: 0, skipped: 0, failed: 0 } }),
   getPendingProjects: (req, res) => res.status(200).json({ projects: [] }),
   getProjectById: (req, res) => res.status(200).json({ project: {} }),
   updateProjectStatus: (req, res) => res.status(200).json({}),
@@ -20,12 +23,17 @@ jest.mock('../../src/controllers/adminController', () => ({
   rejectProject: (req, res) => res.status(200).json({}),
   requestProjectChanges: (req, res) => res.status(200).json({}),
   getAllMilestones: (req, res) => res.status(200).json({ milestones: [] }),
+  bulkMilestones: (req, res) => res.status(200).json({ summary: { processed: 0, skipped: 0, failed: 0 } }),
   deleteMilestone: (req, res) => res.status(200).json({}),
   getAllOrganizations: (req, res) => res.status(200).json({ organizations: [] }),
+  bulkOrganizations: (req, res) => res.status(200).json({ summary: { processed: 0, skipped: 0, failed: 0 } }),
   deleteOrganization: (req, res) => res.status(200).json({}),
   getAllAttachments: (req, res) => res.status(200).json({ attachments: [] }),
   getAttachmentStats: (req, res) => res.status(200).json({ stats: {} }),
-  forceDeleteAttachment: (req, res) => res.status(200).json({})
+  bulkAttachments: (req, res) => res.status(200).json({ summary: { processed: 0, skipped: 0, failed: 0 } }),
+  forceDeleteAttachment: (req, res) => res.status(200).json({}),
+  getAdminAlerts: (req, res) => res.status(200).json({ overdue: [], approaching: [], atRisk: [], summary: {} }),
+  exportAdminData: (req, res) => res.status(200).send('')
 }));
 
 jest.mock('../../src/controllers/ratingController', () => ({
@@ -33,6 +41,8 @@ jest.mock('../../src/controllers/ratingController', () => ({
     res.status(200).json({ ratings: [{ id: 11, status: req.query.status || 'active' }] }),
   getAdminRatingStats: (req, res) =>
     res.status(200).json({ stats: { total: 1, active: 1, flagged: 0, removed: 0 } }),
+  bulkModerateRatings: (req, res) =>
+    res.status(200).json({ summary: { processed: req.body.ids?.length || 0, skipped: 0, failed: 0 } }),
   moderateRating: (req, res) =>
     res.status(200).json({ message: 'ok', rating: { id: Number(req.params.ratingId), action: req.body.action } })
 }));
@@ -114,5 +124,16 @@ describe('admin rating routes integration', () => {
     expect(response.status).toBe(200);
     expect(response.body.rating.id).toBe(15);
     expect(response.body.rating.action).toBe('flag');
+  });
+
+  test('moderates ratings in bulk for authorized admin', async () => {
+    const response = await request(app)
+      .put('/api/admin/ratings/bulk/moderate')
+      .set('Authorization', 'Bearer token')
+      .set('x-role', 'admin')
+      .send({ action: 'remove', ids: [1, 2, 3], reason: 'Policy violation' });
+
+    expect(response.status).toBe(200);
+    expect(response.body.summary.processed).toBe(3);
   });
 });

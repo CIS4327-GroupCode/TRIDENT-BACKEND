@@ -6,10 +6,51 @@ const {
   ResearcherProfile
 } = require('../database/models');
 const notificationService = require('../services/notificationService');
+const { logAudit, AUDIT_ACTIONS } = require('../utils/auditLogger');
+const { createBulkJob, updateBulkJob } = require('../utils/bulkJobStore');
 
 const REVIEW_EDIT_WINDOW_DAYS = 14;
 const SCORE_DIMENSIONS = ['quality', 'communication', 'timeliness', 'overall'];
 const MAX_COMMENT_LENGTH = 2000;
+const BULK_SYNC_THRESHOLD = 50;
+
+const normalizeBulkIds = (ids) => {
+  if (!Array.isArray(ids)) {
+    return null;
+  }
+
+  const normalized = [];
+  const seen = new Set();
+  for (const rawId of ids) {
+    const parsedId = Number.parseInt(rawId, 10);
+    if (!Number.isInteger(parsedId) || parsedId <= 0 || seen.has(parsedId)) {
+      continue;
+    }
+    seen.add(parsedId);
+    normalized.push(parsedId);
+  }
+
+  return normalized;
+};
+
+const buildBulkResponse = ({ action, batchId, mode, requestedCount, processed, skipped, failed, queued = null }) => ({
+  ok: true,
+  entityType: 'rating',
+  action,
+  batchId,
+  mode,
+  summary: {
+    requested: requestedCount,
+    processed: processed.length,
+    skipped: skipped.length,
+    failed: failed.length,
+    queued: queued?.queuedCount || 0,
+  },
+  processed,
+  skipped,
+  failed,
+  queued,
+});
 
 const parseScores = (scores) => {
   let parsed = scores;
@@ -644,6 +685,174 @@ const moderateRating = async (req, res) => {
   }
 };
 
+const bulkModerateRatings = async (req, res) => {
+  try {
+    const { ids, action, reason } = req.body || {};
+    if (!['flag', 'remove', 'restore'].includes(action)) {
+      return res.status(400).json({ error: 'Action must be one of: flag, remove, restore' });
+    }
+
+    const normalizedIds = normalizeBulkIds(ids);
+    if (!normalizedIds || normalizedIds.length === 0) {
+      return res.status(400).json({ error: 'Provide a non-empty ids array with valid integer IDs.' });
+    }
+
+    const statusMap = {
+      flag: 'flagged',
+      remove: 'removed',
+      restore: 'active',
+    };
+
+    const executeBulk = async (batchId, targetIds) => {
+      const processed = [];
+      const skipped = [];
+      const failed = [];
+
+      for (const ratingId of targetIds) {
+        try {
+          const rating = await Rating.findByPk(ratingId, {
+            include: [
+              {
+                model: Project,
+                as: 'project',
+                attributes: ['project_id', 'title'],
+              },
+            ],
+          });
+
+          if (!rating) {
+            skipped.push({ id: ratingId, reason: 'Rating not found' });
+            continue;
+          }
+
+          const newStatus = statusMap[action];
+          if (rating.status === newStatus) {
+            skipped.push({ id: ratingId, reason: `Rating is already ${newStatus}` });
+            continue;
+          }
+
+          const previousStatus = rating.status;
+
+          await rating.update({
+            status: newStatus,
+            moderation_reason: reason ? String(reason).trim() : null,
+            moderated_by: req.user.id,
+            moderated_at: new Date(),
+          });
+
+          if (rating.rated_by_user_id) {
+            try {
+              await notificationService.createNotification({
+                userId: rating.rated_by_user_id,
+                type: 'rating_moderated',
+                title: 'Rating Moderation Update',
+                message: `Your rating for project "${rating.project?.title || rating.project_id}" was ${newStatus}.`,
+                link: `/browse?project=${rating.project_id}`,
+                metadata: {
+                  rating_id: rating.id,
+                  moderation_action: action,
+                  moderation_reason: reason || null,
+                  batch_id: batchId,
+                },
+              });
+            } catch (notifError) {
+              console.error('Bulk rating notification error:', notifError);
+            }
+          }
+
+          await logAudit({
+            actorId: req.user.id,
+            action: AUDIT_ACTIONS.ADMIN_BULK_REVIEW_MODERATED,
+            entityType: 'rating',
+            entityId: rating.id,
+            metadata: {
+              batch_id: batchId,
+              moderation_action: action,
+              moderation_reason: reason || null,
+              previous_status: previousStatus,
+              new_status: newStatus,
+            },
+          });
+
+          processed.push({ id: rating.id, message: `Rating ${newStatus}` });
+        } catch (error) {
+          failed.push({ id: ratingId, error: error.message || 'Failed to moderate rating' });
+        }
+      }
+
+      return { processed, skipped, failed };
+    };
+
+    if (normalizedIds.length <= BULK_SYNC_THRESHOLD) {
+      const batchId = `batch_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+      const result = await executeBulk(batchId, normalizedIds);
+      return res.status(200).json(buildBulkResponse({
+        action,
+        batchId,
+        mode: 'sync',
+        requestedCount: normalizedIds.length,
+        processed: result.processed,
+        skipped: result.skipped,
+        failed: result.failed,
+      }));
+    }
+
+    const job = createBulkJob({
+      entityType: 'rating',
+      action,
+      actorId: req.user.id,
+      requestedCount: normalizedIds.length,
+    });
+
+    queueMicrotask(async () => {
+      updateBulkJob(job.jobId, { status: 'running' });
+      try {
+        const result = await executeBulk(job.jobId, normalizedIds);
+        updateBulkJob(job.jobId, {
+          status: 'completed',
+          result: buildBulkResponse({
+            action,
+            batchId: job.jobId,
+            mode: 'queued',
+            requestedCount: normalizedIds.length,
+            processed: result.processed,
+            skipped: result.skipped,
+            failed: result.failed,
+            queued: {
+              jobId: job.jobId,
+              status: 'completed',
+              queuedCount: normalizedIds.length,
+            },
+          }),
+        });
+      } catch (error) {
+        updateBulkJob(job.jobId, {
+          status: 'failed',
+          error: error.message || 'Bulk rating moderation failed',
+        });
+      }
+    });
+
+    return res.status(202).json(buildBulkResponse({
+      action,
+      batchId: job.jobId,
+      mode: 'queued',
+      requestedCount: normalizedIds.length,
+      processed: [],
+      skipped: [],
+      failed: [],
+      queued: {
+        jobId: job.jobId,
+        status: 'queued',
+        queuedCount: normalizedIds.length,
+      },
+    }));
+  } catch (error) {
+    console.error('Bulk moderate ratings error:', error);
+    return res.status(500).json({ error: 'Failed to process bulk rating moderation' });
+  }
+};
+
 const getAdminRatings = async (req, res) => {
   try {
     const page = Math.max(Number.parseInt(req.query.page || '1', 10), 1);
@@ -749,6 +958,7 @@ module.exports = {
   updateProjectRating,
   deleteProjectRating,
   moderateRating,
+  bulkModerateRatings,
   getAdminRatings,
   getAdminRatingStats
 };

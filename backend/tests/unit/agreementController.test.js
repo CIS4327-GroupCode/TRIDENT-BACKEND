@@ -12,6 +12,12 @@ jest.mock('../../src/database/models', () => ({
     create: jest.fn(),
     findAll: jest.fn()
   },
+  AgreementRemovalRequest: {
+    findOne: jest.fn(),
+    findAll: jest.fn(),
+    findAndCountAll: jest.fn(),
+    create: jest.fn()
+  },
   Application: {
     findByPk: jest.fn()
   },
@@ -19,6 +25,15 @@ jest.mock('../../src/database/models', () => ({
     findByPk: jest.fn()
   },
   Project: {},
+  Milestone: {
+    findAll: jest.fn()
+  },
+  MilestoneResearcher: {
+    findAll: jest.fn()
+  },
+  ProjectResearcherAccess: {
+    findAll: jest.fn()
+  },
   User: {
     findAll: jest.fn()
   },
@@ -63,7 +78,10 @@ jest.mock('../../src/utils/auditLogger', () => ({
     AGREEMENT_ACTIVATED: 'AGREEMENT_ACTIVATED',
     AGREEMENT_COMPLETED: 'AGREEMENT_COMPLETED',
     AGREEMENT_ARCHIVED: 'AGREEMENT_ARCHIVED',
-    AGREEMENT_TERMINATED: 'AGREEMENT_TERMINATED'
+    AGREEMENT_TERMINATED: 'AGREEMENT_TERMINATED',
+    AGREEMENT_REMOVAL_REQUESTED: 'AGREEMENT_REMOVAL_REQUESTED',
+    AGREEMENT_REMOVAL_APPROVED: 'AGREEMENT_REMOVAL_APPROVED',
+    AGREEMENT_REMOVAL_REJECTED: 'AGREEMENT_REMOVAL_REJECTED'
   },
   logAudit: jest.fn().mockResolvedValue(undefined)
 }));
@@ -80,7 +98,15 @@ jest.mock('../../src/utils/agreementObservability', () => ({
 }));
 
 const agreementController = require('../../src/controllers/agreementController');
-const { Contract, ContractReview, Application, Attachment, User, sequelize } = require('../../src/database/models');
+const {
+  Contract,
+  ContractReview,
+  AgreementRemovalRequest,
+  Application,
+  Attachment,
+  User,
+  sequelize
+} = require('../../src/database/models');
 const notificationService = require('../../src/services/notificationService');
 const pdfService = require('../../src/services/pdfService');
 const { getAgreementObservabilitySnapshot } = require('../../src/utils/agreementObservability');
@@ -166,6 +192,26 @@ function mockContract(overrides = {}) {
   return { ...contract, ...overrides };
 }
 
+function makeRemovalRequest(overrides = {}) {
+  const record = {
+    id: 77,
+    contract_id: 10,
+    requested_by: 7,
+    reason: 'Request cleanup',
+    status: 'pending',
+    reviewed_by: null,
+    reviewed_at: null,
+    feedback: null,
+    save: jest.fn().mockResolvedValue(true),
+    toSafeObject() {
+      return { ...this };
+    },
+    ...overrides
+  };
+
+  return record;
+}
+
 describe('agreementController lifecycle', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -175,6 +221,10 @@ describe('agreementController lifecycle', () => {
     sequelize.transaction.mockImplementation(async (callback) => callback(transactionMock));
     Contract.update.mockResolvedValue([1]);
     ContractReview.create.mockResolvedValue(makeReview());
+    AgreementRemovalRequest.findOne.mockResolvedValue(null);
+    AgreementRemovalRequest.findAll.mockResolvedValue([]);
+    AgreementRemovalRequest.findAndCountAll.mockResolvedValue({ count: 0, rows: [] });
+    AgreementRemovalRequest.create.mockResolvedValue(makeRemovalRequest());
     User.findAll.mockResolvedValue([{ id: 90 }, { id: 91 }]);
   });
 
@@ -606,6 +656,117 @@ describe('agreementController lifecycle', () => {
     expect(res.status).toHaveBeenCalledWith(409);
     expect(Contract.findOne).not.toHaveBeenCalled();
     expect(Contract.create).not.toHaveBeenCalled();
+  });
+
+  test('requestAgreementRemoval creates pending request for agreement party', async () => {
+    const contract = mockContract({ status: 'active', title: 'Active NDA' });
+    const removalRequest = makeRemovalRequest({ id: 501, reason: 'Duplicate agreement' });
+    Contract.findByPk.mockResolvedValue(contract);
+    AgreementRemovalRequest.findOne.mockResolvedValueOnce(null);
+    AgreementRemovalRequest.create.mockResolvedValueOnce(removalRequest);
+
+    const req = {
+      user: { id: 7, role: 'nonprofit' },
+      params: { id: '10' },
+      body: { reason: 'Duplicate agreement' }
+    };
+    const res = createRes();
+
+    await agreementController.requestAgreementRemoval(req, res);
+
+    expect(AgreementRemovalRequest.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contract_id: 10,
+        requested_by: 7,
+        reason: 'Duplicate agreement',
+        status: 'pending'
+      }),
+      expect.objectContaining({ transaction: transactionMock })
+    );
+    expect(ContractReview.create).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'removal_requested', contract_id: 10 }),
+      expect.objectContaining({ transaction: transactionMock })
+    );
+    expect(notificationService.createBulkNotifications).toHaveBeenCalledWith(
+      [90, 91],
+      expect.objectContaining({ type: 'agreement_removal_requested' })
+    );
+    expect(res.status).toHaveBeenCalledWith(201);
+  });
+
+  test('approveAgreementRemovalRequest archives agreement and notifies both parties', async () => {
+    const contract = mockContract({ status: 'active', metadata: { source: 'test' } });
+    const removalRequest = makeRemovalRequest({ id: 700, reason: 'Retired scope' });
+    Contract.findByPk.mockResolvedValueOnce(contract);
+    AgreementRemovalRequest.findOne.mockResolvedValueOnce(removalRequest);
+
+    const req = {
+      user: { id: 90, role: 'admin' },
+      params: { id: '10', requestId: '700' },
+      body: { feedback: 'Approved by compliance' }
+    };
+    const res = createRes();
+
+    await agreementController.approveAgreementRemovalRequest(req, res);
+
+    expect(removalRequest.status).toBe('approved');
+    expect(removalRequest.save).toHaveBeenCalledWith(expect.objectContaining({ transaction: transactionMock }));
+    expect(contract.status).toBe('archived');
+    expect(contract.is_current_version).toBe(false);
+    expect(contract.save).toHaveBeenCalledWith(expect.objectContaining({ transaction: transactionMock }));
+    expect(notificationService.createBulkNotifications).toHaveBeenCalledWith(
+      [7, 11],
+      expect.objectContaining({ type: 'agreement_removal_approved' })
+    );
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ message: 'Agreement removal request approved' }));
+  });
+
+  test('rejectAgreementRemovalRequest records rejection and notifies requester', async () => {
+    const contract = mockContract({ status: 'active', title: 'Agreement A' });
+    const removalRequest = makeRemovalRequest({ id: 701, requested_by: 11 });
+    Contract.findByPk.mockResolvedValueOnce(contract);
+    AgreementRemovalRequest.findOne.mockResolvedValueOnce(removalRequest);
+
+    const req = {
+      user: { id: 90, role: 'super_admin' },
+      params: { id: '10', requestId: '701' },
+      body: { feedback: 'Insufficient justification' }
+    };
+    const res = createRes();
+
+    await agreementController.rejectAgreementRemovalRequest(req, res);
+
+    expect(removalRequest.status).toBe('rejected');
+    expect(removalRequest.save).toHaveBeenCalledWith(expect.objectContaining({ transaction: transactionMock }));
+    expect(ContractReview.create).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'removal_rejected', contract_id: 10 }),
+      expect.objectContaining({ transaction: transactionMock })
+    );
+    expect(notificationService.createNotification).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 11, type: 'agreement_removal_rejected' })
+    );
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ message: 'Agreement removal request rejected' }));
+  });
+
+  test('adminListAgreementRemovalRequests returns paginated records', async () => {
+    AgreementRemovalRequest.findAndCountAll.mockResolvedValueOnce({
+      count: 1,
+      rows: [makeRemovalRequest({ id: 888, status: 'approved' })]
+    });
+
+    const req = { query: { page: '1', limit: '5', status: 'approved' } };
+    const res = createRes();
+
+    await agreementController.adminListAgreementRemovalRequests(req, res);
+
+    expect(AgreementRemovalRequest.findAndCountAll).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { status: 'approved' },
+        limit: 5,
+        offset: 0
+      })
+    );
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ total: 1, requests: expect.any(Array) }));
   });
 
   test('listAgreementReviews and listAgreementHistory return structured workflow data', async () => {

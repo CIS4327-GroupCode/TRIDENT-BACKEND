@@ -10,6 +10,12 @@ const INAPP_TYPE_TO_PREFERENCE = {
   'milestone_completed': 'inapp_notifications',
   'milestone_deadline_approaching': 'inapp_notifications',
   'milestone_overdue': 'inapp_notifications',
+  'milestone_revision_requested': 'inapp_notifications',
+  'milestone_revision_approved': 'inapp_notifications',
+  'milestone_revision_rejected': 'inapp_notifications',
+  'milestone_request_created': 'inapp_notifications',
+  'milestone_request_approved': 'inapp_notifications',
+  'milestone_request_rejected': 'inapp_notifications',
   'project_created': 'inapp_notifications',
   'project_updated': 'inapp_notifications',
   'project_status_changed': 'inapp_notifications',
@@ -38,6 +44,9 @@ const INAPP_TYPE_TO_PREFERENCE = {
   'agreement_archived': 'inapp_notifications',
   'agreement_amendment_created': 'inapp_notifications',
   'agreement_terminated': 'inapp_notifications',
+  'agreement_removal_requested': 'inapp_notifications',
+  'agreement_removal_approved': 'inapp_notifications',
+  'agreement_removal_rejected': 'inapp_notifications',
   'user_suspended': 'inapp_notifications',
   'security': 'inapp_notifications',
   'system_announcement': 'inapp_notifications'
@@ -51,6 +60,12 @@ const EMAIL_TYPE_TO_PREFERENCE = {
   'milestone_completed': 'email_milestones',
   'milestone_deadline_approaching': 'email_milestones',
   'milestone_overdue': 'email_milestones',
+  'milestone_revision_requested': 'email_milestones',
+  'milestone_revision_approved': 'email_milestones',
+  'milestone_revision_rejected': 'email_milestones',
+  'milestone_request_created': 'email_milestones',
+  'milestone_request_approved': 'email_milestones',
+  'milestone_request_rejected': 'email_milestones',
   'project_created': 'email_project_updates',
   'project_updated': 'email_project_updates',
   'project_status_changed': 'email_project_updates',
@@ -58,7 +73,10 @@ const EMAIL_TYPE_TO_PREFERENCE = {
   'project_submitted_for_review': 'email_project_updates',
   'project_approved': 'email_project_updates',
   'project_rejected': 'email_project_updates',
-  'project_application': 'email_project_updates'
+  'project_application': 'email_project_updates',
+  'agreement_removal_requested': 'email_project_updates',
+  'agreement_removal_approved': 'email_project_updates',
+  'agreement_removal_rejected': 'email_project_updates'
 };
 
 /**

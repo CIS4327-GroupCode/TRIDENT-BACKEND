@@ -1,10 +1,13 @@
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
-const path = require('path');
-const fs = require('fs');
 
 const messageService = require('../services/messageService');
+const { getStorageAdapter } = require('../services/storage');
+const {
+  createMessageUploadAsset,
+  getMessageUploadAssetForUser
+} = require('../services/messageUploadService');
 const { authenticate } = require('../middleware/auth');
 const { createRateLimiter } = require('../middleware/rateLimit');
 
@@ -73,21 +76,8 @@ function handleServiceError(res, error) {
   }
 }
 
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    const uploadsDir = path.join(process.cwd(), 'uploads');
-    fs.mkdirSync(uploadsDir, { recursive: true });
-    cb(null, uploadsDir);
-  },
-  filename: function (req, file, cb) {
-    const safeOriginalName = file.originalname.replace(/\s+/g, '_');
-    const uniqueName = `${Date.now()}-${safeOriginalName}`;
-    cb(null, uniqueName);
-  },
-});
-
 const upload = multer({
-  storage,
+  storage: multer.memoryStorage(),
   limits: {
     fileSize: MAX_UPLOAD_SIZE_BYTES,
   },
@@ -157,16 +147,62 @@ router.post('/upload', messageUploadRateLimiter, handleUpload, async (req, res) 
       });
     }
 
+    const result = await createMessageUploadAsset({
+      user: req.user,
+      file: req.file,
+      route: req.originalUrl
+    });
+
+    if (!result.accepted) {
+      return res.status(result.statusCode).json({
+        success: false,
+        error: result.errorCode,
+        message: result.message,
+        reason: result.reason,
+        accountSuspended: result.accountSuspended,
+        incidentId: result.incident?.id || null
+      });
+    }
+
     return res.status(201).json({
       success: true,
-      file_name: req.file.originalname,
-      file_url: `/uploads/${req.file.filename}`,
+      file_name: result.asset.file_name,
+      file_url: result.fileUrl,
     });
   } catch (error) {
     console.error('UPLOAD ERROR:', error);
     return res.status(500).json({
       success: false,
       error: 'UPLOAD_FAILED',
+    });
+  }
+});
+
+router.get('/uploads/:assetId', async (req, res) => {
+  try {
+    const asset = await getMessageUploadAssetForUser({
+      assetId: req.params.assetId,
+      userId: req.user.id
+    });
+
+    if (!asset) {
+      return res.status(404).json({
+        success: false,
+        error: 'FILE_NOT_FOUND'
+      });
+    }
+
+    const storageAdapter = getStorageAdapter();
+    const stream = await storageAdapter.getReadStream(asset.storage_key);
+
+    res.setHeader('Content-Type', asset.mimetype || 'application/octet-stream');
+    res.setHeader('Content-Disposition', `attachment; filename="${asset.file_name}"`);
+    return stream.pipe(res);
+  } catch (error) {
+    console.error('MESSAGE UPLOAD DOWNLOAD ERROR:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'DOWNLOAD_FAILED'
     });
   }
 });

@@ -3,26 +3,87 @@ jest.mock('../../src/services/notificationService', () => ({
   createBulkNotifications: jest.fn()
 }));
 
+jest.mock('../../src/utils/auditLogger', () => ({
+  AUDIT_ACTIONS: {
+    MILESTONE_REVISION_REQUESTED: 'MILESTONE_REVISION_REQUESTED',
+    MILESTONE_REVISION_APPROVED: 'MILESTONE_REVISION_APPROVED',
+    MILESTONE_REVISION_REJECTED: 'MILESTONE_REVISION_REJECTED',
+    MILESTONE_REQUEST_CREATED: 'MILESTONE_REQUEST_CREATED',
+    MILESTONE_REQUEST_APPROVED: 'MILESTONE_REQUEST_APPROVED',
+    MILESTONE_REQUEST_REJECTED: 'MILESTONE_REQUEST_REJECTED',
+    PROJECT_RESEARCHER_ACCESS_UPDATED: 'PROJECT_RESEARCHER_ACCESS_UPDATED'
+  },
+  logAudit: jest.fn().mockResolvedValue(undefined)
+}));
+
+jest.mock('../../src/services/milestoneAccessService', () => ({
+  canResearcherAccessMilestone: jest.fn().mockResolvedValue(true),
+  getResearcherMilestoneAccess: jest.fn().mockResolvedValue({ wholeProject: false, milestoneIds: [] }),
+  hasWholeProjectAccess: jest.fn().mockResolvedValue(false),
+  hasAcceptedProjectParticipation: jest.fn().mockResolvedValue(true)
+}));
+
 jest.mock('../../src/database/models', () => ({
   Milestone: {
     create: jest.fn(),
     findAll: jest.fn(),
     findOne: jest.fn()
   },
+  MilestoneResearcher: {
+    findAll: jest.fn(),
+    findOne: jest.fn(),
+    destroy: jest.fn(),
+    bulkCreate: jest.fn(),
+    count: jest.fn(),
+    findOrCreate: jest.fn()
+  },
+  MilestoneRevisionRequest: {
+    findOne: jest.fn(),
+    create: jest.fn(),
+    findAll: jest.fn(),
+    count: jest.fn()
+  },
+  MilestoneRequest: {
+    findOne: jest.fn(),
+    create: jest.fn(),
+    findAll: jest.fn(),
+    save: jest.fn()
+  },
+  ProjectResearcherAccess: {
+    findAll: jest.fn(),
+    findOne: jest.fn(),
+    findOrCreate: jest.fn()
+  },
   Project: {
     findOne: jest.fn()
   },
   User: {
-    findByPk: jest.fn()
+    findByPk: jest.fn(),
+    findAll: jest.fn()
   },
   Application: {
-    findAll: jest.fn()
+    findAll: jest.fn(),
+    findOne: jest.fn()
+  },
+  sequelize: {
+    transaction: jest.fn()
   }
 }));
 
 const milestoneController = require('../../src/controllers/milestoneController');
 const notificationService = require('../../src/services/notificationService');
-const { Milestone, Project, User, Application } = require('../../src/database/models');
+const milestoneAccessService = require('../../src/services/milestoneAccessService');
+const {
+  Milestone,
+  MilestoneResearcher,
+  MilestoneRevisionRequest,
+  MilestoneRequest,
+  ProjectResearcherAccess,
+  Project,
+  User,
+  Application,
+  sequelize
+} = require('../../src/database/models');
 
 describe('milestoneController', () => {
   let req;
@@ -50,9 +111,32 @@ describe('milestoneController', () => {
     Milestone.create.mockReset();
     Milestone.findAll.mockReset();
     Milestone.findOne.mockReset();
+    MilestoneResearcher.findAll.mockReset();
+    MilestoneResearcher.findOne.mockReset();
+    MilestoneResearcher.destroy.mockReset();
+    MilestoneResearcher.bulkCreate.mockReset();
+    MilestoneResearcher.count.mockReset();
+    MilestoneResearcher.findOrCreate.mockReset();
+    MilestoneRevisionRequest.findOne.mockReset();
+    MilestoneRevisionRequest.create.mockReset();
+    MilestoneRevisionRequest.findAll.mockReset();
+    MilestoneRevisionRequest.count.mockReset();
+    MilestoneRequest.findOne.mockReset();
+    MilestoneRequest.create.mockReset();
+    MilestoneRequest.findAll.mockReset();
+    ProjectResearcherAccess.findAll.mockReset();
+    ProjectResearcherAccess.findOne.mockReset();
+    ProjectResearcherAccess.findOrCreate.mockReset();
     Project.findOne.mockReset();
     User.findByPk.mockReset();
+    User.findAll.mockReset();
     Application.findAll.mockReset();
+    Application.findOne.mockReset();
+    sequelize.transaction.mockReset();
+    milestoneAccessService.canResearcherAccessMilestone.mockReset();
+    milestoneAccessService.getResearcherMilestoneAccess.mockReset();
+    milestoneAccessService.hasWholeProjectAccess.mockReset();
+    milestoneAccessService.hasAcceptedProjectParticipation.mockReset();
 
     req = {
       user: { id: 7 },
@@ -68,7 +152,40 @@ describe('milestoneController', () => {
 
     Project.findOne.mockResolvedValue(baseProject);
     User.findByPk.mockResolvedValue(baseUser);
+    User.findAll.mockResolvedValue([]);
     Application.findAll.mockResolvedValue([]);
+    Application.findOne.mockResolvedValue(null);
+    MilestoneResearcher.findAll.mockResolvedValue([]);
+    MilestoneResearcher.findOne.mockResolvedValue(null);
+    MilestoneResearcher.destroy.mockResolvedValue(1);
+    MilestoneResearcher.bulkCreate.mockResolvedValue([]);
+    MilestoneResearcher.count.mockResolvedValue(0);
+    MilestoneResearcher.findOrCreate.mockResolvedValue([{}, true]);
+    MilestoneRevisionRequest.findOne.mockResolvedValue(null);
+    MilestoneRevisionRequest.create.mockResolvedValue({
+      id: 1,
+      requested_by: 7,
+      toSafeObject: () => ({ id: 1, requested_by: 7, status: 'pending' })
+    });
+    MilestoneRevisionRequest.findAll.mockResolvedValue([]);
+    MilestoneRevisionRequest.count.mockResolvedValue(0);
+    MilestoneRequest.findOne.mockResolvedValue(null);
+    MilestoneRequest.create.mockResolvedValue({
+      id: 1,
+      requested_by: 7,
+      name: 'New Milestone',
+      status: 'pending',
+      toSafeObject: () => ({ id: 1, requested_by: 7, status: 'pending' })
+    });
+    MilestoneRequest.findAll.mockResolvedValue([]);
+    ProjectResearcherAccess.findAll.mockResolvedValue([]);
+    ProjectResearcherAccess.findOne.mockResolvedValue(null);
+    ProjectResearcherAccess.findOrCreate.mockResolvedValue([{ whole_project: false, save: jest.fn() }, true]);
+    sequelize.transaction.mockImplementation(async (callback) => callback({}));
+    milestoneAccessService.canResearcherAccessMilestone.mockResolvedValue(true);
+    milestoneAccessService.getResearcherMilestoneAccess.mockResolvedValue({ wholeProject: false, milestoneIds: [] });
+    milestoneAccessService.hasWholeProjectAccess.mockResolvedValue(false);
+    milestoneAccessService.hasAcceptedProjectParticipation.mockResolvedValue(true);
     notificationService.createNotification.mockResolvedValue({ id: 100 });
     notificationService.createBulkNotifications.mockResolvedValue([]);
   });
@@ -486,6 +603,218 @@ describe('milestoneController', () => {
       await milestoneController.getMilestoneStats(req, res);
       expect(res.status).toHaveBeenCalledWith(500);
       expect(res.json).toHaveBeenCalledWith({ error: 'Failed to fetch milestone statistics' });
+    });
+  });
+
+  describe('assignment endpoints', () => {
+    test('setMilestoneAssignments replaces assignments for valid accepted researchers', async () => {
+      req.body = { researcher_ids: [22] };
+
+      Milestone.findOne.mockResolvedValueOnce(buildMilestone());
+      User.findAll.mockResolvedValueOnce([{ id: 22 }]);
+      Application.findAll.mockResolvedValueOnce([{ researcher_id: 22 }]);
+      MilestoneResearcher.findAll
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([
+          {
+            toSafeObject: () => ({ researcher_id: 22, researcher: { id: 22, name: 'R', email: 'r@test.com' } })
+          }
+        ]);
+
+      await milestoneController.setMilestoneAssignments(req, res);
+
+      expect(MilestoneResearcher.bulkCreate).toHaveBeenCalledWith(
+        [
+          expect.objectContaining({
+            researcher_id: 22,
+            assigned_by: 7
+          })
+        ],
+        expect.any(Object)
+      );
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ count: 1 }));
+    });
+
+    test('setMilestoneAssignments rejects unaccepted researchers', async () => {
+      req.body = { researcher_ids: [22] };
+
+      Milestone.findOne.mockResolvedValueOnce(buildMilestone());
+      User.findAll.mockResolvedValueOnce([{ id: 22 }]);
+      Application.findAll.mockResolvedValueOnce([]);
+
+      await milestoneController.setMilestoneAssignments(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          error: 'Researchers must have an accepted project application before assignment'
+        })
+      );
+    });
+
+    test('getMilestoneAssignments returns own assignment for researcher', async () => {
+      req.user = { id: 22, role: 'researcher' };
+
+      Milestone.findOne.mockResolvedValueOnce(buildMilestone());
+      Application.findOne.mockResolvedValueOnce({ id: 9 });
+      MilestoneResearcher.findOne.mockResolvedValueOnce({
+        toSafeObject: () => ({ researcher_id: 22 })
+      });
+
+      await milestoneController.getMilestoneAssignments(req, res);
+
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ count: 1 }));
+    });
+
+    test('removeMilestoneAssignment returns 404 when assignment is missing', async () => {
+      req.params = { projectId: 5, id: 11, researcherId: 99 };
+      Milestone.findOne.mockResolvedValueOnce(buildMilestone());
+      MilestoneResearcher.destroy.mockResolvedValueOnce(0);
+
+      await milestoneController.removeMilestoneAssignment(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(404);
+    });
+  });
+
+  describe('request and revision workflows', () => {
+    test('createMilestoneRequest rejects when researcher is not accepted on project', async () => {
+      req.user = { id: 22, role: 'researcher' };
+      req.body = {
+        name: 'Proposed Milestone',
+        justification: 'Need additional validation checkpoint'
+      };
+      milestoneAccessService.hasAcceptedProjectParticipation.mockResolvedValueOnce(false);
+
+      await milestoneController.createMilestoneRequest(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({ error: 'Only accepted project researchers can request milestones' })
+      );
+    });
+
+    test('approveMilestoneRequest creates milestone and links requester assignment', async () => {
+      req.params = { projectId: 5, requestId: 30 };
+      req.body = { feedback: 'Approved with scope' };
+
+      const requestRecord = {
+        id: 30,
+        project_id: 5,
+        requested_by: 22,
+        name: 'New Milestone Request',
+        description: 'Proposed description',
+        due_date: '2027-01-10',
+        status: 'pending',
+        save: jest.fn().mockResolvedValue(true),
+        toSafeObject: () => ({ id: 30, status: 'approved' })
+      };
+      const createdMilestone = {
+        id: 101,
+        name: 'New Milestone Request',
+        status: 'pending',
+        toSafeObject: () => ({ id: 101, status: 'pending' })
+      };
+
+      MilestoneRequest.findOne.mockResolvedValueOnce(requestRecord);
+      Milestone.create.mockResolvedValueOnce(createdMilestone);
+
+      await milestoneController.approveMilestoneRequest(req, res);
+
+      expect(Milestone.create).toHaveBeenCalledWith(
+        expect.objectContaining({ project_id: 5, name: 'New Milestone Request' }),
+        expect.any(Object)
+      );
+      expect(MilestoneResearcher.findOrCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ milestone_id: 101, researcher_id: 22 })
+        })
+      );
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({ message: 'Milestone request approved' })
+      );
+    });
+
+    test('requestMilestoneRevision creates pending revision and moves completed milestone to revision_requested', async () => {
+      req.user = { id: 22, role: 'researcher' };
+      req.body = { reason: 'Final artifact needs corrections' };
+
+      const milestone = buildMilestone({
+        status: 'completed',
+        save: jest.fn().mockResolvedValue(true),
+        toSafeObject: () => ({ id: 11, status: 'revision_requested' })
+      });
+      Milestone.findOne.mockResolvedValueOnce(milestone);
+
+      await milestoneController.requestMilestoneRevision(req, res);
+
+      expect(MilestoneRevisionRequest.create).toHaveBeenCalledWith(
+        expect.objectContaining({ milestone_id: 11, requested_by: 22, status: 'pending' }),
+        expect.any(Object)
+      );
+      expect(milestone.status).toBe('revision_requested');
+      expect(milestone.save).toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(201);
+    });
+
+    test('approveMilestoneRevisionRequest transitions milestone to revision_in_progress', async () => {
+      req.params = { projectId: 5, id: 11, revisionId: 4 };
+      req.body = { feedback: 'Proceed with requested updates' };
+
+      const milestone = buildMilestone({
+        status: 'revision_requested',
+        save: jest.fn().mockResolvedValue(true),
+        toSafeObject: () => ({ id: 11, status: 'revision_in_progress' })
+      });
+      const revisionRequest = {
+        id: 4,
+        requested_by: 22,
+        status: 'pending',
+        save: jest.fn().mockResolvedValue(true),
+        toSafeObject: () => ({ id: 4, status: 'approved' })
+      };
+
+      Milestone.findOne.mockResolvedValueOnce(milestone);
+      MilestoneRevisionRequest.findOne.mockResolvedValueOnce(revisionRequest);
+
+      await milestoneController.approveMilestoneRevisionRequest(req, res);
+
+      expect(revisionRequest.status).toBe('approved');
+      expect(milestone.status).toBe('revision_in_progress');
+      expect(notificationService.createNotification).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: 22, type: 'milestone_revision_approved' })
+      );
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ message: 'Revision request approved' }));
+    });
+
+    test('rejectMilestoneRevisionRequest restores completed status when no pending revisions remain', async () => {
+      req.params = { projectId: 5, id: 11, revisionId: 9 };
+      req.body = { feedback: 'No changes required' };
+
+      const milestone = buildMilestone({
+        status: 'revision_requested',
+        save: jest.fn().mockResolvedValue(true)
+      });
+      const revisionRequest = {
+        id: 9,
+        requested_by: 22,
+        status: 'pending',
+        save: jest.fn().mockResolvedValue(true),
+        toSafeObject: () => ({ id: 9, status: 'rejected' })
+      };
+
+      Milestone.findOne.mockResolvedValueOnce(milestone);
+      MilestoneRevisionRequest.findOne.mockResolvedValueOnce(revisionRequest);
+      MilestoneRevisionRequest.count.mockResolvedValueOnce(0);
+
+      await milestoneController.rejectMilestoneRevisionRequest(req, res);
+
+      expect(revisionRequest.status).toBe('rejected');
+      expect(milestone.status).toBe('completed');
+      expect(notificationService.createNotification).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: 22, type: 'milestone_revision_rejected' })
+      );
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ message: 'Revision request rejected' }));
     });
   });
 });
