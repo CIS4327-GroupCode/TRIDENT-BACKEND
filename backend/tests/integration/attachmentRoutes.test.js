@@ -13,7 +13,8 @@ const {
   ResearcherProfile,
   Milestone,
   MilestoneResearcher,
-  Attachment
+  Attachment,
+  UploadSecurityIncident
 } = require('../../src/database/models');
 
 describe('Attachment Routes Integration', () => {
@@ -36,6 +37,7 @@ describe('Attachment Routes Integration', () => {
     await sequelize.authenticate();
     await MilestoneResearcher.sync({ alter: true });
     await Attachment.sync({ alter: true });
+    await UploadSecurityIncident.sync({ alter: true });
 
     nonprofitUser = await User.create({
       name: 'Attachment Nonprofit',
@@ -146,6 +148,7 @@ describe('Attachment Routes Integration', () => {
   afterAll(async () => {
     if (project?.project_id) {
       await Attachment.destroy({ where: { project_id: project.project_id }, force: true });
+      await UploadSecurityIncident.destroy({ where: { user_id: [nonprofitUser?.id, researcherUser?.id].filter(Boolean) }, force: true });
       await Application.destroy({ where: { project_id: project.project_id }, force: true });
       await Project.destroy({ where: { project_id: project.project_id }, force: true });
     }
@@ -317,6 +320,40 @@ describe('Attachment Routes Integration', () => {
       await request(app)
         .delete(`/api/projects/${project.project_id}/attachments/${assignedUpload.body.attachment.id}`)
         .set('Authorization', `Bearer ${nonprofitToken}`);
+    });
+
+    it('rejects malicious uploads, records an incident, and auto-suspends the uploader', async () => {
+      const response = await request(app)
+        .post(`/api/projects/${project.project_id}/attachments`)
+        .set('Authorization', `Bearer ${researcherToken}`)
+        .field('milestone_id', String(milestone.id))
+        .attach('file', Buffer.from('<script>alert("xss")</script> malicious payload'), {
+          filename: 'research-notes.txt',
+          contentType: 'text/plain'
+        });
+
+      expect(response.status).toBe(422);
+      expect(response.body.error).toBe('Upload rejected by upload security policy');
+      expect(response.body.code).toBe('MALICIOUS_UPLOAD_REJECTED');
+      expect(response.body.accountSuspended).toBe(true);
+      expect(response.body.incidentId).toBeTruthy();
+
+      const storedIncident = await UploadSecurityIncident.findByPk(response.body.incidentId);
+      expect(storedIncident).toBeTruthy();
+      expect(storedIncident.surface).toBe('milestone_attachment');
+      expect(storedIncident.scan_status).toBe('infected');
+      expect(storedIncident.action_taken).toBe('rejected_and_suspended');
+      expect(storedIncident.user_id).toBe(researcherUser.id);
+
+      const suspendedResearcher = await User.findByPk(researcherUser.id, { paranoid: false });
+      expect(suspendedResearcher.deleted_at).toBeTruthy();
+
+      const blockedFollowUp = await request(app)
+        .get(`/api/projects/${project.project_id}/attachments`)
+        .set('Authorization', `Bearer ${researcherToken}`);
+
+      expect(blockedFollowUp.status).toBe(401);
+      expect(blockedFollowUp.body.error).toBe('Account has been suspended');
     });
   });
 });

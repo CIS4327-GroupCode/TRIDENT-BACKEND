@@ -14,6 +14,7 @@ const Message = require('./Message');
 const Thread = require('./Thread');
 const ThreadParticipant = require('./ThreadParticipant');
 const MessageAttachment = require('./MessageAttachment');
+const MessageUploadAsset = require('./MessageUploadAsset');
 const AuditLog = require('./AuditLog');
 const UserPreferences = require('./UserPreferences');
 const ProjectReview = require('./ProjectReview');
@@ -26,6 +27,7 @@ const EmailVerification = require('./EmailVerification');
 const PasswordReset = require('./PasswordReset');
 const TwoFactorCode = require('./TwoFactorCode');
 const Attachment = require('./Attachment');
+const UploadSecurityIncident = require('./UploadSecurityIncident');
 const Contract = require('./Contract');
 const AgreementRemovalRequest = require('./AgreementRemovalRequest');
 const sequelize = require('../index');
@@ -203,6 +205,16 @@ MessageAttachment.belongsTo(Message, {
   as: 'message',
 });
 
+// User <-> MessageUploadAsset
+User.hasMany(MessageUploadAsset, {
+  foreignKey: 'uploaded_by',
+  as: 'messageUploadAssets'
+});
+MessageUploadAsset.belongsTo(User, {
+  foreignKey: 'uploaded_by',
+  as: 'uploader'
+});
+
 // User <-> AuditLog
 User.hasMany(AuditLog, { foreignKey: 'actor_id', as: 'auditLogs' });
 AuditLog.belongsTo(User, { foreignKey: 'actor_id', as: 'actor' });
@@ -258,6 +270,12 @@ Attachment.belongsTo(Milestone, { foreignKey: 'milestone_id', as: 'milestone' })
 // User <-> Attachment (uploader)
 User.hasMany(Attachment, { foreignKey: 'uploaded_by', as: 'uploadedAttachments' });
 Attachment.belongsTo(User, { foreignKey: 'uploaded_by', as: 'uploader' });
+
+// User <-> UploadSecurityIncident
+User.hasMany(UploadSecurityIncident, { foreignKey: 'user_id', as: 'uploadSecurityIncidents' });
+UploadSecurityIncident.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
+User.hasMany(UploadSecurityIncident, { foreignKey: 'reviewed_by', as: 'reviewedUploadSecurityIncidents' });
+UploadSecurityIncident.belongsTo(User, { foreignKey: 'reviewed_by', as: 'reviewer' });
 
 // Application <-> Contract
 Application.hasMany(Contract, { foreignKey: 'application_id', as: 'contracts' });
@@ -323,6 +341,7 @@ module.exports = {
   Thread,
   ThreadParticipant,
   MessageAttachment,
+  MessageUploadAsset,
   AuditLog,
   UserPreferences,
   ProjectReview,
@@ -335,6 +354,7 @@ module.exports = {
   PasswordReset,
   TwoFactorCode,
   Attachment,
+  UploadSecurityIncident,
   Contract,
   AgreementRemovalRequest,
   sequelize

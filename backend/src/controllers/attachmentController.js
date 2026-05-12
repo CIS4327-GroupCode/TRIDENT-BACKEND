@@ -10,7 +10,7 @@ const {
   sequelize
 } = require('../database/models');
 const { getStorageAdapter } = require('../services/storage');
-const { scanAttachment } = require('../services/scanService');
+const { evaluateUploadSecurity } = require('../services/uploadSecurityService');
 const {
   canResearcherAccessMilestone,
   getResearcherMilestoneAccess
@@ -319,18 +319,33 @@ const uploadAttachment = async (req, res) => {
       return res.status(400).json({ error: 'File is required' });
     }
 
+    const securityEvaluation = await evaluateUploadSecurity({
+      user: req.user,
+      file: req.file,
+      surface: milestoneId !== null ? 'milestone_attachment' : 'project_attachment',
+      route: req.originalUrl,
+      metadata: {
+        project_id: project.project_id,
+        milestone_id: milestoneId
+      }
+    });
+
+    if (!securityEvaluation.accepted) {
+      return res.status(securityEvaluation.statusCode).json({
+        error: securityEvaluation.message,
+        code: securityEvaluation.errorCode,
+        reason: securityEvaluation.reason,
+        accountSuspended: securityEvaluation.accountSuspended,
+        incidentId: securityEvaluation.incident?.id || null
+      });
+    }
+
     const nextVersion = featureSupport.versioning
       ? await getNextVersion(project.project_id, req.file.originalname, milestoneId, featureSupport.milestoneScope)
       : 1;
 
-    const scanResult = await scanAttachment({
-      filename: req.file.originalname,
-      mimetype: req.file.mimetype,
-      buffer: req.file.buffer
-    });
-
-    const scanStatus = scanResult.clean ? 'clean' : (scanResult.scanStatus || 'infected');
-    const finalStatus = scanResult.clean ? 'active' : 'quarantined';
+    const scanResult = securityEvaluation.scanResult;
+    const scanStatus = scanResult.scanStatus || 'clean';
 
     const { storageKey } = await storageAdapter.save({
       projectId: project.project_id,
@@ -346,7 +361,7 @@ const uploadAttachment = async (req, res) => {
       storage_key: storageKey,
       project_id: project.project_id,
       uploaded_by: req.user.id,
-      status: finalStatus
+      status: 'active'
     };
 
     if (featureSupport.milestoneScope) {
@@ -361,7 +376,7 @@ const uploadAttachment = async (req, res) => {
     if (featureSupport.scanColumns) {
       attachmentPayload.scan_status = scanStatus;
       attachmentPayload.scanned_at = new Date();
-      attachmentPayload.quarantine_reason = scanResult.reason || null;
+      attachmentPayload.quarantine_reason = null;
     }
 
     const attachment = await Attachment.create(attachmentPayload);
@@ -385,14 +400,6 @@ const uploadAttachment = async (req, res) => {
           where: versionWhere
         }
       );
-    }
-
-    if (finalStatus === 'quarantined') {
-      return res.status(422).json({
-        error: 'Attachment failed malware/security scan and was quarantined',
-        reason: scanResult.reason || 'Suspicious file detected',
-        attachment: attachment.toSafeObject()
-      });
     }
 
     return res.status(201).json({ attachment: attachment.toSafeObject() });

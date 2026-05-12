@@ -3,7 +3,7 @@ const sequelize = require('../index');
 
 class Attachment extends Model {
   toSafeObject() {
-    const { ...safeAttachment } = this.toJSON();
+    const { storage_key, ...safeAttachment } = this.toJSON();
     return safeAttachment;
   }
 }

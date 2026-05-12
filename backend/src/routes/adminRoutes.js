@@ -11,12 +11,14 @@ router.use(requireAdmin);
 
 // Dashboard
 router.get('/dashboard/stats', adminController.getDashboardStats);
+router.get('/bulk-jobs/:jobId', adminController.getBulkJobStatus);
 
 // Admin Creation (super_admin only)
 router.post('/users/create-admin', requireSuperAdmin, adminController.createAdmin);
 
 // User Management
 router.get('/users', adminController.getAllUsers);
+router.post('/users/bulk', adminController.bulkUsers);
 router.get('/users/:id', adminController.getUserDetails);
 router.put('/users/:id/status', adminController.updateUserStatus);
 router.post('/users/:id/approve', adminController.approveUser);
@@ -26,6 +28,7 @@ router.delete('/users/:id/permanent', adminController.permanentlyDeleteUser);
 
 // Project Management
 router.get('/projects', adminController.getAllProjects);
+router.post('/projects/bulk', adminController.bulkProjects);
 router.get('/projects/pending', adminController.getPendingProjects);
 router.get('/projects/:id', adminController.getProjectById);
 router.put('/projects/:id/status', adminController.updateProjectStatus);
@@ -38,20 +41,30 @@ router.post('/projects/:id/request-changes', adminController.requestProjectChang
 
 // Milestone Management
 router.get('/milestones', adminController.getAllMilestones);
+router.post('/milestones/bulk', adminController.bulkMilestones);
 router.delete('/milestones/:id', adminController.deleteMilestone);
 
 // Organization Management
 router.get('/organizations', adminController.getAllOrganizations);
+router.post('/organizations/bulk', adminController.bulkOrganizations);
 router.delete('/organizations/:id', adminController.deleteOrganization);
 
 // Attachment Governance (UC13)
 router.get('/attachments', adminController.getAllAttachments);
 router.get('/attachments/stats', adminController.getAttachmentStats);
+router.get('/upload-incidents', adminController.getUploadSecurityIncidents);
+router.get('/upload-incidents/stats', adminController.getUploadSecurityIncidentStats);
+router.post('/upload-incidents/:id/resolve', adminController.resolveUploadSecurityIncident);
+router.get('/message-upload-assets', adminController.getMessageUploadAssets);
+router.get('/message-upload-assets/stats', adminController.getMessageUploadAssetStats);
+router.delete('/message-upload-assets/:id', adminController.forceDeleteMessageUploadAsset);
+router.post('/attachments/bulk', adminController.bulkAttachments);
 router.delete('/attachments/:id', adminController.forceDeleteAttachment);
 
 // Rating Moderation (UC5)
 router.get('/ratings', ratingController.getAdminRatings);
 router.get('/ratings/stats', ratingController.getAdminRatingStats);
+router.put('/ratings/bulk/moderate', ratingController.bulkModerateRatings);
 router.put('/ratings/:ratingId/moderate', ratingController.moderateRating);
 
 // Agreement Governance (UC11)

@@ -8,6 +8,7 @@ const {
   User,
 } = require('../database/models');
 const notificationService = require('./notificationService');
+const { normalizeMessageAttachments } = require('./messageUploadService');
 const { encryptMessage, decryptMessage } = require('../utils/encryption');
 
 const MESSAGE_DECRYPTION_PLACEHOLDER = '[Message could not be decrypted]';
@@ -537,8 +538,14 @@ async function sendMessage({ threadId, senderId, body, attachments = [] }) {
     let createdAttachments = [];
 
     if (safeAttachments.length > 0) {
+      const normalizedAttachments = await normalizeMessageAttachments({
+        attachments: safeAttachments,
+        senderId: normalizedSenderId,
+        transaction
+      });
+
       createdAttachments = await MessageAttachment.bulkCreate(
-        safeAttachments.map((file) => ({
+        normalizedAttachments.map((file) => ({
           message_id: createdMessage.id,
           file_name: file.file_name,
           file_url: file.file_url || null,
